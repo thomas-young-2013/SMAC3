@@ -266,7 +266,7 @@ class AbstractRunHistory2EPM(object):
             config = runhistory.ids_config[k.config_id]
             x = [config.get(p.name) for p in params]
             features = feature_dict.get(k.instance_id)
-            if features:
+            if features is not None:
                 x.extend(features)
             X.append(x)
             y.append(v.cost)

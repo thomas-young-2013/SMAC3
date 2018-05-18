@@ -25,6 +25,12 @@ from smac.optimizer.objective import average_cost
 from smac.utils.util_funcs import get_rng
 from smac.utils.constants import MAXINT
 from smac.optimizer.pSMAC import read
+from smac.runhistory.runhistory2epm import RunHistory2EPM4Cost, RunHistory2EPM4LogCost
+from smac.tae.execute_ta_run import StatusType
+from smac.epm.rf_with_instances import RandomForestWithInstances
+from smac.epm.rfr_imputator import RFRImputator
+from smac.utils.util_funcs import get_types
+from smac.configspace.util import convert_configurations_to_array
 
 __author__ = "Marius Lindauer"
 __copyright__ = "Copyright 2017, ML4AAD"
@@ -98,6 +104,8 @@ class Hydra(object):
         self.top_dir = None
         self.solver = None
         self.portfolio = None
+        self.model = None
+        self.runhistory2epm = None
         self.rh = RunHistory(average_cost)
         self._tae = tae
         self.tae = tae(ta=self.scenario.ta, run_obj=self.scenario.run_obj)
@@ -113,6 +121,59 @@ class Hydra(object):
         self.portfolio_cost = None
         self.use_epm = use_epm
         self.candidate_configs_cost_per_inst = {}
+
+    def _setup_model(self, scenario):
+        """
+        Setup for model to fill missing instance performance when using validation set
+        """
+        self.logger.info('Setting up model')
+        num_params = len(scenario.cs.get_hyperparameters())
+        types, bounds = get_types(scenario.cs, scenario.feature_array)
+        model = RandomForestWithInstances(types=types,
+                                          bounds=bounds,
+                                          instance_features=scenario.feature_array,
+                                          seed=self.rng.randint(MAXINT),
+                                          pca_components=scenario.PCA_DIM,
+                                          unlog_y=scenario.run_obj == "runtime",
+                                          num_trees=scenario.rf_num_trees,
+                                          do_bootstrapping=scenario.rf_do_bootstrapping,
+                                          ratio_features=scenario.rf_ratio_features,
+                                          min_samples_split=scenario.rf_min_samples_split,
+                                          min_samples_leaf=scenario.rf_min_samples_leaf,
+                                          max_depth=scenario.rf_max_depth)
+        if scenario.run_obj == "runtime":
+
+            # if we log the performance data,
+            # the RFRImputator will already get
+            # log transform data from the runhistory
+            cutoff = np.log10(scenario.cutoff)
+            threshold = np.log10(scenario.cutoff *
+                                 scenario.par_factor)
+
+            imputor = RFRImputator(rng=self.rng,
+                                   cutoff=cutoff,
+                                   threshold=threshold,
+                                   model=model,
+                                   change_threshold=0.01,
+                                   max_iter=2)
+
+            runhistory2epm = RunHistory2EPM4LogCost(
+                scenario=scenario, num_params=num_params,
+                success_states=[StatusType.SUCCESS, ],
+                impute_censored_data=True,
+                impute_state=[StatusType.CAPPED, ],
+                imputor=imputor)
+
+        elif scenario.run_obj == 'quality':
+            runhistory2epm = RunHistory2EPM4Cost(scenario=scenario, num_params=num_params,
+                                                 success_states=[
+                                                     StatusType.SUCCESS,
+                                                     StatusType.CRASHED],
+                                                 impute_censored_data=False, impute_state=None)
+        else:
+            raise ValueError('Not supported')
+        self.model = model
+        self.runhistory2epm = runhistory2epm
 
     def _get_validation_set(self, val_set: str, delete: bool=True) -> typing.List[str]:
         """
@@ -151,6 +212,7 @@ class Hydra(object):
             val = insts[ids].tolist()
             if delete:
                 self.scenario.train_insts = np.delete(insts, ids).tolist()
+            self._setup_model(self.scenario)
             return val
 
     def optimize(self) -> typing.List[Configuration]:
@@ -217,19 +279,24 @@ class Hydra(object):
                         if best >= self.scenario.cutoff:
                             best = self.scenario.cutoff * self.scenario.par_factor
                         best_c = config
-                contribution[best_c] += 1
-                # For stochastic update of the mean
-                contribution_improvement[best_c] = \
-                    contribution_improvement[best_c] * (contribution[best_c] - 1) / contribution[best_c]
-                if prev_best:
-                    contribution_improvement[best_c] += prev_best - best
-                else:
-                    contribution_improvement[best_c] += self.scenario.cutoff * self.scenario.par_factor - best
-            print(';,.,;'*24)
-            for config in contribution_improvement:
-                print(config)
-                print(contribution[config], contribution_improvement[config])
 
+                if best < self.scenario.cutoff:
+                    contribution[best_c] += 1
+                    # For stochastic update of the mean
+                    contribution_improvement[best_c] = \
+                        contribution_improvement[best_c] * (contribution[best_c] - 1) / contribution[best_c]
+                    if prev_best:
+                        contribution_improvement[best_c] += prev_best - best
+                    else:
+                        contribution_improvement[best_c] += self.scenario.cutoff * self.scenario.par_factor - best
+            print(';,.,;'*24)
+            _sum = np.sum(list(contribution_improvement.values()))
+            for config in contribution_improvement:
+                print(config, end='')
+                print(contribution[config], contribution_improvement[config],
+                      contribution_improvement[config] / _sum,
+                      contribution_improvement[config] / _sum * contribution[config])
+                print()
             print(';,.,;'*24)
             if self.val_set:
                 to_keep_ids = val_ids[:self.incs_per_round]
@@ -242,6 +309,7 @@ class Hydra(object):
                 self.logger.info(inc)
                 config_cost_per_inst[inc] = to_merge[inc]
 
+            read(self.rh, os.path.join(self.top_dir, 'psmac3*', 'run_' + str(MAXINT)), self.scenario.cs, self.logger)
             cur_portfolio_cost = self._update_portfolio(incs, config_cost_per_inst)
             if portfolio_cost <= cur_portfolio_cost:
                 self.logger.info("No further progress (%f) --- terminate hydra", portfolio_cost)
@@ -257,7 +325,6 @@ class Hydra(object):
             self.scenario.output_dir = os.path.join(self.top_dir, "psmac3-output_%s" % (
                 datetime.datetime.fromtimestamp(time.time()).strftime('%Y-%m-%d_%H:%M:%S_%f')))
             self.output_dir = create_output_directory(self.scenario, run_id=self.run_id, logger=self.logger)
-        read(self.rh, os.path.join(self.top_dir, 'psmac3*', 'run_' + str(MAXINT)), self.scenario.cs, self.logger)
         self.rh.save_json(fn=os.path.join(self.top_dir, 'all_validated_runs_runhistory.json'), save_external=True)
         with open(os.path.join(self.top_dir, 'portfolio.pkl'), 'wb') as fh:
             pickle.dump(self.portfolio, fh)
@@ -290,14 +357,25 @@ class Hydra(object):
                     self.portfolio.append(kept)
                     cost_per_inst = config_cost_per_inst[kept]
                     if self.cost_per_inst:
-                        if len(self.cost_per_inst) != len(cost_per_inst):
-                            raise ValueError('Num validated Instances mismatch!')
-                        else:
-                            for key in cost_per_inst:
-                                self.cost_per_inst[key] = min(self.cost_per_inst[key], cost_per_inst[key])
+                        for key in cost_per_inst:
+                            self.cost_per_inst[key] = min(self.cost_per_inst[key], cost_per_inst[key])
                     else:
                         self.cost_per_inst = cost_per_inst
-            cur_cost = np.mean(list(self.cost_per_inst.values()))  # type: np.float
+            # fill the remaining instance performance entries with predictions on unvalidated runs
+            if len(self.val_set) != len(self.scenario.train_insts):
+                X, y = self.runhistory2epm.transform(self.rh)
+                self.model.train(X, y)
+                for inst in self.scenario.train_insts:
+                    if inst not in self.val_set:
+                        preds = [self.model.predict(np.array([
+                            np.hstack([convert_configurations_to_array([config])[0],
+                                      self.scenario.feature_dict[inst]])])) for config in self.portfolio]
+                        if self.scenario.run_obj == "runtime":
+                            preds = np.power(10, preds)
+                        self.cost_per_inst[inst] = np.min(preds)
+            cur_cost = np.mean(list(self.cost_per_inst.values()))  # type: np.float;
+
+        # TODO How to adjust "metric" if nothing was validated????? This is just a "placeholder"
         else:  # No validated data. Set the mean to the approximated mean
             means = []  # can contain nans as not every instance was evaluated thus we should use nanmean to approximate
             for kept in incs:
