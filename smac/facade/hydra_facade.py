@@ -65,6 +65,7 @@ class Hydra(object):
                  run_id: int=1,
                  tae: typing.Type[ExecuteTARun]=ExecuteTARunOld,
                  use_epm: bool=False,
+                 marginal_contribution: bool=False,
                  **kwargs):
         """
         Constructor
@@ -91,6 +92,10 @@ class Hydra(object):
             Target Algorithm Runner (supports old and aclib format as well as AbstractTAFunc)
         use_epm: bool
             Flag to determine if the validation uses real runs or EPM predictions
+        marginal_contribution: bool
+            Determines how to construct the portfolio
+            True -> only construct from the n (incs_per_round) most contributing configurations the portfolio
+            False -> add the n best (incs_per_round) in each iteration
 
         """
         self.logger = logging.getLogger(
@@ -121,6 +126,7 @@ class Hydra(object):
         self.portfolio_cost = None
         self.use_epm = use_epm
         self.candidate_configs_cost_per_inst = {}
+        self.marginal_contribution = marginal_contribution
 
     def _setup_model(self, scenario):
         """
@@ -215,6 +221,50 @@ class Hydra(object):
             self._setup_model(self.scenario)
             return val
 
+    def contribution(self):
+        """
+        Greedily construct portfolio only from configurations that contribute to the overall improvement
+        """
+        contribution = defaultdict(int)
+        contribution_improvement = defaultdict(float)
+        for instance in self.val_set:
+            best = np.inf
+            best_c = None
+            prev_best = None
+            for config in self.candidate_configs_cost_per_inst.keys():
+                if self.candidate_configs_cost_per_inst[config][instance] < best:
+                    if best_c:
+                        prev_best = best
+                    best = self.candidate_configs_cost_per_inst[config][instance]
+                    if best >= self.scenario.cutoff:
+                        best = self.scenario.cutoff * self.scenario.par_factor
+                    best_c = config
+
+            contribution[best_c] += 1
+            # For stochastic update of the mean
+            contribution_improvement[best_c] = \
+                contribution_improvement[best_c] * (contribution[best_c] - 1) / contribution[best_c]
+            if prev_best:
+                contribution_improvement[best_c] += prev_best - best
+            else:
+                contribution_improvement[best_c] += self.scenario.cutoff * self.scenario.par_factor - best
+        self.logger.info(';,.,;'*24)
+        self.logger.info('Contributions: ')
+        _sum = np.sum(list(contribution_improvement.values()))
+        results = []
+        for config in contribution_improvement:
+            weighted_contribution = contribution_improvement[config] / _sum * contribution[config]
+            self.logger.info(config)
+            # contributes to solving #instances
+            self.logger.info('%3d, %6.3f', contribution[config],  # contribution_improvement[config],
+                             #  contribution_improvement[config] / _sum,
+                             # weighted improvement over instances
+                             weighted_contribution)
+            self.logger.info(' ')
+            results.append((config, weighted_contribution))
+        self.logger.info(';,.,;'*24)
+        return list(map(lambda x: x[0], sorted(results, key=lambda y: y[1])))
+
     def optimize(self) -> typing.List[Configuration]:
         """
         Optimizes the algorithm provided in scenario (given in constructor)
@@ -265,51 +315,23 @@ class Hydra(object):
             to_merge = cost_per_conf_v if self.val_set else cost_per_conf_e
             self.candidate_configs_cost_per_inst = {**self.candidate_configs_cost_per_inst,
                                                     **to_merge}
-            contribution = defaultdict(int)
-            contribution_improvement = defaultdict(float)
-            for instance in self.val_set:
-                best = np.inf
-                best_c = None
-                prev_best = None
-                for config in self.candidate_configs_cost_per_inst.keys():
-                    if self.candidate_configs_cost_per_inst[config][instance] < best:
-                        if best_c:
-                            prev_best = best
-                        best = self.candidate_configs_cost_per_inst[config][instance]
-                        if best >= self.scenario.cutoff:
-                            best = self.scenario.cutoff * self.scenario.par_factor
-                        best_c = config
-
-                if best < self.scenario.cutoff:
-                    contribution[best_c] += 1
-                    # For stochastic update of the mean
-                    contribution_improvement[best_c] = \
-                        contribution_improvement[best_c] * (contribution[best_c] - 1) / contribution[best_c]
-                    if prev_best:
-                        contribution_improvement[best_c] += prev_best - best
-                    else:
-                        contribution_improvement[best_c] += self.scenario.cutoff * self.scenario.par_factor - best
-            print(';,.,;'*24)
-            _sum = np.sum(list(contribution_improvement.values()))
-            for config in contribution_improvement:
-                print(config, end='')
-                print(contribution[config], contribution_improvement[config],
-                      contribution_improvement[config] / _sum,
-                      contribution_improvement[config] / _sum * contribution[config])
-                print()
-            print(';,.,;'*24)
-            if self.val_set:
-                to_keep_ids = val_ids[:self.incs_per_round]
-            else:
-                to_keep_ids = est_ids[:self.incs_per_round]
             config_cost_per_inst = {}
-            incs = incs[to_keep_ids]
-            self.logger.info('Kept incumbents')
-            for inc in incs:
-                self.logger.info(inc)
-                config_cost_per_inst[inc] = to_merge[inc]
+            if self.marginal_contribution:
+                incs = self.contribution()[:self.incs_per_round]
+                for inc in incs:
+                    config_cost_per_inst[inc] = self.candidate_configs_cost_per_inst[inc]
+            else:
+                if self.val_set:
+                    to_keep_ids = val_ids[:self.incs_per_round]
+                else:
+                    to_keep_ids = est_ids[:self.incs_per_round]
+                incs = incs[to_keep_ids]
+                self.logger.info('Kept incumbents')
+                for inc in incs:
+                    self.logger.info(inc)
+                    config_cost_per_inst[inc] = to_merge[inc]
 
-            read(self.rh, os.path.join(self.top_dir, 'psmac3*', 'run_' + str(MAXINT)), self.scenario.cs, self.logger)
+            read(self.rh, os.path.join(self.top_dir, 'psmac3*', 'run_*'), self.scenario.cs, self.logger)
             cur_portfolio_cost = self._update_portfolio(incs, config_cost_per_inst)
             if portfolio_cost <= cur_portfolio_cost:
                 self.logger.info("No further progress (%f) --- terminate hydra", portfolio_cost)
