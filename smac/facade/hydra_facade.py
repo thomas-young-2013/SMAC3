@@ -218,11 +218,13 @@ class Hydra(object):
                             best = self.scenario.cutoff * self.scenario.par_factor
                         best_c = config
                 contribution[best_c] += 1
-                print(prev_best, best, self.scenario.cutoff)
+                # For stochastic update of the mean
+                contribution_improvement[best_c] = \
+                    contribution_improvement[best_c] * (contribution[best_c] - 1) / contribution[best_c]
                 if prev_best:
-                    contribution_improvement[best_c] = prev_best - best
+                    contribution_improvement[best_c] += prev_best - best
                 else:
-                    contribution_improvement[best_c] = self.scenario.cutoff * self.scenario.par_factor - best
+                    contribution_improvement[best_c] += self.scenario.cutoff * self.scenario.par_factor - best
             print(';,.,;'*24)
             for config in contribution_improvement:
                 print(config)
