@@ -142,6 +142,7 @@ class SMACCLI(object):
                 n_iterations=main_args_.hydra_iterations,
                 val_set=main_args_.hydra_validation,
                 incs_per_round=main_args_.hydra_incumbents_per_round,
+                use_epm=main_args_.validation_mode == "epm",
                 n_optimizers=main_args_.hydra_n_optimizers)
         elif main_args_.mode == "PSMAC":
             optimizer = PSMAC(
@@ -152,6 +153,7 @@ class SMACCLI(object):
                 validate=main_args_.psmac_validate,
                 n_optimizers=main_args_.hydra_n_optimizers,
                 n_incs=main_args_.hydra_incumbents_per_round,
+                use_epm=main_args_.validation_mode == "epm"
             )
         try:
             optimizer.optimize()

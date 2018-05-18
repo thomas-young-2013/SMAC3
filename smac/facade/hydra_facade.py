@@ -58,6 +58,7 @@ class Hydra(object):
                  rng: typing.Optional[typing.Union[np.random.RandomState, int]]=None,
                  run_id: int=1,
                  tae: typing.Type[ExecuteTARun]=ExecuteTARunOld,
+                 use_epm: bool=False,
                  **kwargs):
         """
         Constructor
@@ -82,6 +83,8 @@ class Hydra(object):
             run_id for this hydra run
         tae: ExecuteTARun
             Target Algorithm Runner (supports old and aclib format as well as AbstractTAFunc)
+        use_epm: bool
+            Flag to determine if the validation uses real runs or EPM predictions
 
         """
         self.logger = logging.getLogger(
@@ -108,6 +111,7 @@ class Hydra(object):
         self.cost_per_inst = {}
         self.optimizer = None
         self.portfolio_cost = None
+        self.use_epm = use_epm
 
     def _get_validation_set(self, val_set: str, delete: bool=True) -> typing.List[str]:
         """
@@ -187,6 +191,7 @@ class Hydra(object):
                 n_optimizers=self.n_optimizers,
                 val_set=self.val_set,
                 n_incs=self.n_optimizers,  # return all configurations (unvalidated)
+                use_epm=self.use_epm,
                 **self.kwargs
             )
             self.optimizer.output_dir = self.output_dir

@@ -101,6 +101,7 @@ class PSMAC(object):
                  n_optimizers: int = 2,
                  val_set: typing.Union[typing.List[str], None] = None,
                  n_incs: int=1,
+                 use_epm: bool=False,
                  **kwargs):
         """
         Constructor
@@ -126,6 +127,8 @@ class PSMAC(object):
             Number of incumbents to return (n_incs <= 0 ==> all found configurations)
         val_set: typing.List[str]
             List of instance-ids to validate on
+        use_epm: bool
+            Flag to determine if the validation uses real runs or EPM predictions
 
         """
         self.logger = logging.getLogger(
@@ -148,6 +151,7 @@ class PSMAC(object):
             self.val_set = scenario.train_insts
         else:
             self.val_set = val_set
+        self.use_epm = use_epm
 
     def optimize(self):
         """
@@ -277,6 +281,6 @@ class PSMAC(object):
         new_rh = solver.validate(config_mode=incs,
                                  instance_mode=self.val_set,
                                  repetitions=1,
-                                 use_epm=False,
+                                 use_epm=self.use_epm,
                                  n_jobs=self.n_optimizers)
         return self._get_mean_costs(incs, new_rh)

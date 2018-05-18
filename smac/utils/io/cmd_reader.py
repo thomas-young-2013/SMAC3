@@ -418,6 +418,11 @@ class CMDReader(object):
         req_opts.add_argument("--psmac_validate",
                               action="store_true",
                               help="[dev] Validate all psmac configurations.")
+        req_opts.add_argument("--validation_mode",
+                              choices=["epm", "tae"],
+                              default="tae",
+                              type=str.lower,
+                              help="[dev] Validation mode. Only active in PSMAC or Hydra.")
 
         self.main_cmd_actions, self.main_cmd_translations = CMDReader._extract_action_info(self.parser._actions)
 
