@@ -276,6 +276,7 @@ class PSMAC(object):
         Validation
         """
         solver = SMAC(scenario=self.scenario, tae_runner=self.tae, rng=self.rng, run_id=MAXINT, **self.kwargs)
+        solver.solver.runhistory = self.rh
         self.logger.info('*' * 120)
         self.logger.info('Validating')
         new_rh = solver.validate(config_mode=incs,

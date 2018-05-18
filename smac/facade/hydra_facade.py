@@ -112,6 +112,7 @@ class Hydra(object):
         self.optimizer = None
         self.portfolio_cost = None
         self.use_epm = use_epm
+        self.candidate_configs_cost_per_inst = {}
 
     def _get_validation_set(self, val_set: str, delete: bool=True) -> typing.List[str]:
         """
@@ -197,6 +198,37 @@ class Hydra(object):
             self.optimizer.output_dir = self.output_dir
             incs = self.optimizer.optimize()
             cost_per_conf_v, val_ids, cost_per_conf_e, est_ids = self.optimizer.get_best_incumbents_ids(incs)
+            # keep track of each potential configurations performance(s) on all instances
+            # i.e. merge all dictionaries
+            to_merge = cost_per_conf_v if self.val_set else cost_per_conf_e
+            self.candidate_configs_cost_per_inst = {**self.candidate_configs_cost_per_inst,
+                                                    **to_merge}
+            contribution = defaultdict(int)
+            contribution_improvement = defaultdict(float)
+            for instance in self.val_set:
+                best = np.inf
+                best_c = None
+                prev_best = None
+                for config in self.candidate_configs_cost_per_inst.keys():
+                    if self.candidate_configs_cost_per_inst[config][instance] < best:
+                        if best_c:
+                            prev_best = best
+                        best = self.candidate_configs_cost_per_inst[config][instance]
+                        if best >= self.scenario.cutoff:
+                            best = self.scenario.cutoff * self.scenario.par_factor
+                        best_c = config
+                contribution[best_c] += 1
+                print(prev_best, best, self.scenario.cutoff)
+                if prev_best:
+                    contribution_improvement[best_c] = prev_best - best
+                else:
+                    contribution_improvement[best_c] = self.scenario.cutoff * self.scenario.par_factor - best
+            print(';,.,;'*24)
+            for config in contribution_improvement:
+                print(config)
+                print(contribution[config], contribution_improvement[config])
+
+            print(';,.,;'*24)
             if self.val_set:
                 to_keep_ids = val_ids[:self.incs_per_round]
             else:
@@ -206,7 +238,7 @@ class Hydra(object):
             self.logger.info('Kept incumbents')
             for inc in incs:
                 self.logger.info(inc)
-                config_cost_per_inst[inc] = cost_per_conf_v[inc] if self.val_set else cost_per_conf_e[inc]
+                config_cost_per_inst[inc] = to_merge[inc]
 
             cur_portfolio_cost = self._update_portfolio(incs, config_cost_per_inst)
             if portfolio_cost <= cur_portfolio_cost:
