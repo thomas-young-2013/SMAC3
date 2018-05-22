@@ -224,6 +224,12 @@ class Hydra(object):
     def contribution(self):
         """
         Greedily construct portfolio only from configurations that contribute to the overall improvement
+
+        Returns
+        -------
+        list
+            Configurations (all candidates) sorted by their contribution to the oracle
+
         """
         contribution = defaultdict(int)
         contribution_improvement = defaultdict(float)
@@ -318,7 +324,9 @@ class Hydra(object):
             config_cost_per_inst = {}
             if self.marginal_contribution:
                 incs = self.contribution()[:self.incs_per_round]
+                self.logger.info('Kept incumbents')
                 for inc in incs:
+                    self.logger.info(inc)
                     config_cost_per_inst[inc] = self.candidate_configs_cost_per_inst[inc]
             else:
                 if self.val_set:
