@@ -142,8 +142,10 @@ class PSMAC(object):
         self._tae = tae
         self.tae = tae(ta=self.scenario.ta, run_obj=self.scenario.run_obj)
         if n_optimizers <= 0:
-            self.logger.warning('Invalid value in %s: %d. Setting to 2', 'n_optimizers', n_optimizers)
-        self.n_optimizers = max(n_optimizers, 2)
+            self.logger.warning('Invalid value in %s: %d. Setting to 1', 'n_optimizers', n_optimizers)
+        self.n_optimizers = max(n_optimizers, 1)  # Standard Hydra only uses 1 Optimizer run!
+        if self.n_optimizers == 1:
+            self.logger.warning('Running with only one SMAC run. Is this intended?')
         self.validate = validate
         self.shared_model = shared_model
         self.n_incs = min(max(1, n_incs), self.n_optimizers)
