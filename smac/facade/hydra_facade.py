@@ -65,7 +65,7 @@ class Hydra(object):
                  run_id: int=1,
                  tae: typing.Type[ExecuteTARun]=ExecuteTARunOld,
                  use_epm: bool=False,
-                 marginal_contribution: bool=False,
+                 mode: str='hydra',
                  **kwargs):
         """
         Constructor
@@ -92,10 +92,12 @@ class Hydra(object):
             Target Algorithm Runner (supports old and aclib format as well as AbstractTAFunc)
         use_epm: bool
             Flag to determine if the validation uses real runs or EPM predictions
-        marginal_contribution: bool
+        mode: str
             Determines how to construct the portfolio
-            True -> only construct from the n (incs_per_round) most contributing configurations the portfolio
-            False -> add the n best (incs_per_round) in each iteration
+            mip -> Hydra MIP: From multiple runs choose the k with the best SMAC estimate and then validate those k
+            contribution -> At each iteration determine how much the configuration contributes to the oracle. Keep at
+                            most k
+            "else" -> Keep the k (estimated/validated) best configurations in each round
 
         """
         self.logger = logging.getLogger(
@@ -126,7 +128,7 @@ class Hydra(object):
         self.portfolio_cost = None
         self.use_epm = use_epm
         self.candidate_configs_cost_per_inst = {}
-        self.marginal_contribution = marginal_contribution
+        self.mode = mode
 
     def _setup_model(self, scenario):
         """
@@ -258,8 +260,11 @@ class Hydra(object):
         self.logger.info('Contributions: ')
         _sum = np.sum(list(contribution_improvement.values()))
         results = []
-        for config in contribution_improvement:
-            weighted_contribution = contribution_improvement[config] / _sum * contribution[config]
+        for config in self.candidate_configs_cost_per_inst.keys():
+            if config in contribution:
+                weighted_contribution = contribution_improvement[config] / _sum * contribution[config]
+            else:
+                weighted_contribution = 0
             self.logger.info(config)
             # contributes to solving #instances
             self.logger.info('%3d, %6.3f', contribution[config],  # contribution_improvement[config],
@@ -269,7 +274,50 @@ class Hydra(object):
             self.logger.info(' ')
             results.append((config, weighted_contribution))
         self.logger.info(';,.,;'*24)
-        return list(map(lambda x: x[0], sorted(results, key=lambda y: y[1])))
+        results_ids = list(map(lambda x: x[0], enumerate(sorted(results, key=lambda y: y[1], reverse=True))))
+        results = np.array(results)
+        stop = np.argmin(results[:, 1])
+        stop = np.min((self.incs_per_round, stop))
+        return results[results_ids, 0][:stop]
+
+    def predict_missing_data(self, cost_per_inst: typing.Dict[str, float],
+                             config: Configuration,
+                             fit: bool=False) -> typing.Dict[str, float]:
+        """
+        For instances that were not validated, predict the missing performance values.
+
+        Parameters
+        ----------
+        cost_per_inst: typing.Dict[str, float]
+            Set to validate incumbent(s) on. [train, valX].
+            train => whole training set,
+            valX => train_set * 100/X where X in (0, 100)
+        config: Configuration
+            Flag to delete all validation instances from the training set
+        fit: bool
+
+        Returns
+        -------
+        typing.Dict[str, float]
+            Dict(Config -> Dict(inst_id(str) -> float))
+
+        """
+        if len(self.val_set) != len(self.scenario.train_insts):
+            if fit:
+                X, y = self.runhistory2epm.transform(self.rh)
+                self.model.train(X, y)
+            for inst in self.scenario.train_insts:
+                if inst not in self.val_set and inst not in cost_per_inst:
+                    pred = self.model.predict(
+                        np.array([
+                            np.hstack([
+                                convert_configurations_to_array([config])[0],
+                                self.scenario.feature_dict[inst]]
+                            )]))[0].flatten()[0]
+                    if self.scenario.run_obj == "runtime":
+                        pred = np.power(10, pred)
+                    cost_per_inst[inst] = pred
+        return cost_per_inst
 
     def optimize(self) -> typing.List[Configuration]:
         """
@@ -298,7 +346,7 @@ class Hydra(object):
         self.solver = SMAC(scenario=scen, tae_runner=self.tae, rng=self.rng, run_id=self.run_id, **self.kwargs)
         for i in range(self.n_iterations):
             self.logger.info("="*120)
-            self.logger.info("Hydra Iteration: %d", (i + 1))
+            self.logger.info("Hydra (%s) Iteration: %d", self.mode, (i + 1))
 
             self.optimizer = PSMAC(
                 scenario=self.scenario,
@@ -314,32 +362,29 @@ class Hydra(object):
                 **self.kwargs
             )
             self.optimizer.output_dir = self.output_dir
-            incs = self.optimizer.optimize()
-            cost_per_conf_v, val_ids, cost_per_conf_e, est_ids = self.optimizer.get_best_incumbents_ids(incs)
-            # keep track of each potential configurations performance(s) on all instances
-            # i.e. merge all dictionaries
-            to_merge = cost_per_conf_v if self.val_set else cost_per_conf_e
-            self.candidate_configs_cost_per_inst = {**self.candidate_configs_cost_per_inst,
-                                                    **to_merge}
+            incs = self.optimizer.optimize()  # all incumbents out of all runs
+            val = True if self.val_set else False
+            val = False if self.mode == 'mip' else val
+            to_keep_ids, cost_per_conf = self.optimizer.get_best_incumbents_ids(incs, val)
             config_cost_per_inst = {}
-            if self.marginal_contribution:
-                incs = self.contribution()[:self.incs_per_round]
-                self.logger.info('Kept incumbents')
-                for inc in incs:
-                    self.logger.info(inc)
-                    config_cost_per_inst[inc] = self.candidate_configs_cost_per_inst[inc]
+            if self.mode == 'contribution':
+                self.candidate_configs_cost_per_inst = {**self.candidate_configs_cost_per_inst,
+                                                        **cost_per_conf}
+                incs = self.contribution()
+                cost_per_conf = self.candidate_configs_cost_per_inst
+            elif self.mode == 'mip':
+                incs = incs[to_keep_ids][:self.incs_per_round]  # determine k best incumbents on SMAC estimates
+                _, cost_per_conf = self.optimizer.get_best_incumbents_ids(incs, True)  # validate only those incumbents
             else:
-                if self.val_set:
-                    to_keep_ids = val_ids[:self.incs_per_round]
-                else:
-                    to_keep_ids = est_ids[:self.incs_per_round]
-                incs = incs[to_keep_ids]
-                self.logger.info('Kept incumbents')
-                for inc in incs:
-                    self.logger.info(inc)
-                    config_cost_per_inst[inc] = to_merge[inc]
+                incs = incs[to_keep_ids][:self.incs_per_round]
 
             read(self.rh, os.path.join(self.top_dir, 'psmac3*', 'run_*'), self.scenario.cs, self.logger)
+            self.logger.info('Kept incumbents')
+            fit = True
+            for inc in incs:
+                self.logger.info(inc)
+                config_cost_per_inst[inc] = self.predict_missing_data(cost_per_conf[inc], inc, fit)
+                fit = False
             cur_portfolio_cost = self._update_portfolio(incs, config_cost_per_inst)
             if portfolio_cost <= cur_portfolio_cost:
                 self.logger.info("No further progress (%f) --- terminate hydra", portfolio_cost)
@@ -381,43 +426,14 @@ class Hydra(object):
             The current cost of the portfolio
 
         """
-        if self.val_set:  # we have validated data
-            for kept in incs:
-                if kept not in self.portfolio:
-                    self.portfolio.append(kept)
-                    cost_per_inst = config_cost_per_inst[kept]
-                    if self.cost_per_inst:
-                        for key in cost_per_inst:
-                            self.cost_per_inst[key] = min(self.cost_per_inst[key], cost_per_inst[key])
-                    else:
-                        self.cost_per_inst = cost_per_inst
-            # fill the remaining instance performance entries with predictions on unvalidated runs
-            if len(self.val_set) != len(self.scenario.train_insts):
-                X, y = self.runhistory2epm.transform(self.rh)
-                self.model.train(X, y)
-                for inst in self.scenario.train_insts:
-                    if inst not in self.val_set:
-                        preds = [self.model.predict(np.array([
-                            np.hstack([convert_configurations_to_array([config])[0],
-                                      self.scenario.feature_dict[inst]])])) for config in self.portfolio]
-                        if self.scenario.run_obj == "runtime":
-                            preds = np.power(10, preds)
-                        self.cost_per_inst[inst] = np.min(preds)
-            cur_cost = np.mean(list(self.cost_per_inst.values()))  # type: np.float;
-
-        # TODO How to adjust "metric" if nothing was validated????? This is just a "placeholder"
-        else:  # No validated data. Set the mean to the approximated mean
-            means = []  # can contain nans as not every instance was evaluated thus we should use nanmean to approximate
-            for kept in incs:
-                means.append(np.nanmean(list(self.optimizer.rh.get_instance_costs_for_config(kept).values())))
+        for kept in incs:
+            if kept not in self.portfolio:
                 self.portfolio.append(kept)
-            if self.portfolio_cost:
-                new_mean = self.portfolio_cost * (len(self.portfolio) - len(incs)) / len(self.portfolio)
-                new_mean += np.nansum(means)
-            else:
-                new_mean = np.mean(means)
-            self.cost_per_inst = defaultdict(lambda: new_mean)
-            cur_cost = new_mean
-
-        self.portfolio_cost = cur_cost
+                cost_per_inst = config_cost_per_inst[kept]
+                if self.cost_per_inst:
+                    for key in cost_per_inst:
+                        self.cost_per_inst[key] = min(self.cost_per_inst[key], cost_per_inst[key])
+                else:
+                    self.cost_per_inst = cost_per_inst
+        cur_cost = np.mean(list(self.cost_per_inst.values()))  # type: float
         return cur_cost

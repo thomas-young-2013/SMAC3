@@ -144,7 +144,7 @@ class SMACCLI(object):
                 incs_per_round=main_args_.hydra_incumbents_per_round,
                 use_epm=main_args_.validation_mode == "epm",
                 n_optimizers=main_args_.hydra_n_optimizers,
-                marginal_contribution=main_args_.hydra_contribution
+                mode=main_args_.hydra_mode
             )
         elif main_args_.mode == "PSMAC":
             optimizer = PSMAC(

@@ -423,10 +423,11 @@ class CMDReader(object):
                               default="tae",
                               type=str.lower,
                               help="[dev] Validation mode. Only active in PSMAC or Hydra.")
-        req_opts.add_argument("--hydra_contribution",
-                              action='store_true',
-                              help="[dev] Construct the portfolio only by looking at contributing configurations. "
-                                   "Only active in Hydra.")
+        req_opts.add_argument("--hydra_mode",
+                              choices=['mip', 'standard', 'contribution'],
+                              help="[dev] Portfolio construction mode.",
+                              default='standard',
+                              type=str.lower)
 
         self.main_cmd_actions, self.main_cmd_translations = CMDReader._extract_action_info(self.parser._actions)
 
