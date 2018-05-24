@@ -65,7 +65,7 @@ class Hydra(object):
                  run_id: int=1,
                  tae: typing.Type[ExecuteTARun]=ExecuteTARunOld,
                  use_epm: bool=False,
-                 mode: str='hydra',
+                 mode: str='standard',
                  max_size: int=0,
                  **kwargs):
         """
@@ -399,10 +399,10 @@ class Hydra(object):
             val = True if self.val_set else False
             val = False if self.mode == 'mip' else val
             to_keep_ids, cost_per_conf = self.optimizer.get_best_incumbents_ids(incs, val)
+            self.candidate_configs_cost_per_inst = {**self.candidate_configs_cost_per_inst,
+                                                    **cost_per_conf}
             config_cost_per_inst = {}
             if self.mode == 'contribution':
-                self.candidate_configs_cost_per_inst = {**self.candidate_configs_cost_per_inst,
-                                                        **cost_per_conf}
                 incs = self.get_contributing_configurations(list(self.candidate_configs_cost_per_inst.keys()),
                                                             list(self.candidate_configs_cost_per_inst.keys()))
                 self.portfolio = []  # reset the portfolio as incs contain all needed configurations!
@@ -411,8 +411,6 @@ class Hydra(object):
                 incs = incs[to_keep_ids][:self.incs_per_round]  # determine k best incumbents on SMAC estimates
                 _, cost_per_conf = self.optimizer.get_best_incumbents_ids(incs, True)  # validate only those incumbents
             elif self.mode == 'rr':
-                self.candidate_configs_cost_per_inst = {**self.candidate_configs_cost_per_inst,
-                                                        **cost_per_conf}
                 space = self.max_size - (len(self.portfolio) + len(incs))
                 if self.dequeued:
                     deq = np.array(self.dequeued)
@@ -425,10 +423,6 @@ class Hydra(object):
                         rm = self.portfolio.pop(0)
                         self.logger.info('Removing configuration from portfolio:\n%s', rm)
                         self.dequeued.append(rm)
-                for inc in self.portfolio:
-                    self.logger.info(inc)
-                    config_cost_per_inst[inc] = self.predict_missing_data(
-                        self.candidate_configs_cost_per_inst[inc], inc, fit)
             else:
                 incs = incs[to_keep_ids][:self.incs_per_round]
 
@@ -437,9 +431,9 @@ class Hydra(object):
             fit = True
             for inc in incs:
                 self.logger.info(inc)
-                config_cost_per_inst[inc] = self.predict_missing_data(cost_per_conf[inc], inc, fit)
+                self.candidate_configs_cost_per_inst[inc] = self.predict_missing_data(cost_per_conf[inc], inc, fit)
                 fit = False
-            cur_portfolio_cost = self._update_portfolio(incs, config_cost_per_inst)
+            cur_portfolio_cost = self._update_portfolio(incs, self.candidate_configs_cost_per_inst)
             if portfolio_cost <= cur_portfolio_cost:
                 self.logger.info("No further progress (%f) --- terminate hydra", portfolio_cost)
                 break

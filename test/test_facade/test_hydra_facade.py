@@ -24,19 +24,20 @@ class MockPSMAC(PSMAC):
         MOCKCALLS += 1
 
     def optimize(self):
-        return np.array(self.scenario.cs.sample_configuration(self.n_optimizers))
+        if self.n_optimizers == 1:
+            return np.array([self.scenario.cs.sample_configuration(self.n_optimizers)])
+        else:
+            return np.array(self.scenario.cs.sample_configuration(self.n_optimizers))
 
-    def get_best_incumbents_ids(self, incs):
+    def get_best_incumbents_ids(self, incs, validate: bool=True):
         cost_per_conf_v = cost_per_conf_e = {}
-        val_ids = est_ids = list(range(len(incs)))
+        ids = list(range(len(incs)))
         global MOCKCALLS
         for inc in incs:
             # in successive runs will always be smaller -> hydra doesn't terminate early
             cost_per_conf_v[inc] = cost_per_conf_e[inc] = {inst: max(100 - MOCKCALLS,
                                                                      0) for inst in self.scenario.train_insts}
-        if not self.validate:
-            cost_per_conf_v = val_ids = None
-        return cost_per_conf_v, val_ids, cost_per_conf_e, est_ids
+        return ids, cost_per_conf_v
 
 
 class TestHydraFacade(unittest.TestCase):
@@ -54,7 +55,7 @@ class TestHydraFacade(unittest.TestCase):
 
     @patch('smac.facade.hydra_facade.PSMAC', new=MockPSMAC)
     def test_hydra_mip(self):
-        optimizer = Hydra(self.scenario, n_iterations=3, incs_per_round=2)
+        optimizer = Hydra(self.scenario, n_iterations=3, incs_per_round=2, n_optimizers=2)
         portfolio = optimizer.optimize()
         self.assertEqual(len(portfolio), 6)
         
