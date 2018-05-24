@@ -66,6 +66,7 @@ class Hydra(object):
                  tae: typing.Type[ExecuteTARun]=ExecuteTARunOld,
                  use_epm: bool=False,
                  mode: str='hydra',
+                 max_size: int=0,
                  **kwargs):
         """
         Constructor
@@ -98,6 +99,8 @@ class Hydra(object):
             contribution -> At each iteration determine how much the configuration contributes to the oracle. Keep at
                             most k
             "else" -> Keep the k (estimated/validated) best configurations in each round
+        max_size: int
+            Maximum portfolio size. size <= 0 ==> unbounded portfolio size
 
         """
         self.logger = logging.getLogger(
@@ -129,6 +132,8 @@ class Hydra(object):
         self.use_epm = use_epm
         self.candidate_configs_cost_per_inst = {}
         self.mode = mode
+        self.max_size = max_size if max_size >= 1 else MAXINT
+        self.dequeued = []
 
     def _setup_model(self, scenario):
         """
@@ -223,14 +228,21 @@ class Hydra(object):
             self._setup_model(self.scenario)
             return val
 
-    def contribution(self):
+    def get_contribution(self, portfolio: typing.List[Configuration], candidates: typing.List[Configuration]):
         """
-        Greedily construct portfolio only from configurations that contribute to the overall improvement
+        Compute the contribution for candidates given a portfolio in which they could be integrated
+
+        Parameters
+        ----------
+        portfolio: typing.List[Configuration]
+            Already existing portfolio
+        candidates: typing.List[Configuration]
+            Potential candidates to extend portfolio
 
         Returns
         -------
-        list
-            Configurations (all candidates) sorted by their contribution to the oracle
+        typing.List[typing.Tuple[Configuration, float]]
+            List of tuples containing the contribution of each candidate configuration
 
         """
         contribution = defaultdict(int)
@@ -239,7 +251,7 @@ class Hydra(object):
             best = np.inf
             best_c = None
             prev_best = None
-            for config in self.candidate_configs_cost_per_inst.keys():
+            for config in portfolio:
                 if self.candidate_configs_cost_per_inst[config][instance] < best:
                     if best_c:
                         prev_best = best
@@ -260,25 +272,46 @@ class Hydra(object):
         self.logger.info('Contributions: ')
         _sum = np.sum(list(contribution_improvement.values()))
         results = []
-        for config in self.candidate_configs_cost_per_inst.keys():
+        for config in candidates:
             if config in contribution:
-                weighted_contribution = contribution_improvement[config] / _sum * contribution[config]
+                weighted_contribution = (contribution_improvement[config] / _sum) * contribution[config]
             else:
                 weighted_contribution = 0
             self.logger.info(config)
             # contributes to solving #instances
-            self.logger.info('%3d, %6.3f', contribution[config],  # contribution_improvement[config],
-                             #  contribution_improvement[config] / _sum,
-                             # weighted improvement over instances
+            self.logger.info('%3d, %6.3f', contribution[config],
                              weighted_contribution)
             self.logger.info(' ')
             results.append((config, weighted_contribution))
         self.logger.info(';,.,;'*24)
+        return results
+
+    def get_contributing_configurations(self,
+                                        portfolio: typing.List[Configuration],
+                                        candidates: typing.List[Configuration]):
+        """
+        Construct portfolio only from configurations that contribute to the overall improvement
+
+        Parameters
+        ----------
+        portfolio: typing.List[Configuration]
+            Already existing portfolio
+        candidates: typing.List[Configuration]
+            Potential candidates to extend portfolio
+
+        Returns
+        -------
+        list
+            Configurations (all candidates) sorted by their contribution to the oracle
+
+        """
+        # portfolio = candidates => we want to find the best portfolio from all possible candidates
+        results = self.get_contribution(portfolio, candidates)
         results_ids = list(map(lambda x: x[0], enumerate(sorted(results, key=lambda y: y[1], reverse=True))))
-        results = np.array(results)
+        results = np.array(results)[results_ids]
         stop = np.argmin(results[:, 1])
-        stop = np.min((self.incs_per_round, stop))
-        return results[results_ids, 0][:stop]
+        stop = np.min((self.max_size, stop))
+        return results[:, 0][:stop]
 
     def predict_missing_data(self, cost_per_inst: typing.Dict[str, float],
                              config: Configuration,
@@ -370,11 +403,32 @@ class Hydra(object):
             if self.mode == 'contribution':
                 self.candidate_configs_cost_per_inst = {**self.candidate_configs_cost_per_inst,
                                                         **cost_per_conf}
-                incs = self.contribution()
+                incs = self.get_contributing_configurations(list(self.candidate_configs_cost_per_inst.keys()),
+                                                            list(self.candidate_configs_cost_per_inst.keys()))
+                self.portfolio = []  # reset the portfolio as incs contain all needed configurations!
                 cost_per_conf = self.candidate_configs_cost_per_inst
             elif self.mode == 'mip':
                 incs = incs[to_keep_ids][:self.incs_per_round]  # determine k best incumbents on SMAC estimates
                 _, cost_per_conf = self.optimizer.get_best_incumbents_ids(incs, True)  # validate only those incumbents
+            elif self.mode == 'rr':
+                self.candidate_configs_cost_per_inst = {**self.candidate_configs_cost_per_inst,
+                                                        **cost_per_conf}
+                space = self.max_size - (len(self.portfolio) + len(incs))
+                if self.dequeued:
+                    deq = np.array(self.dequeued)
+                    self.dequeued = []
+                    incs = self.get_contributing_configurations(self.portfolio, np.hstack((incs, deq)))
+                else:
+                    incs = incs
+                if space <= 0:
+                    for _ in range(space, 0):
+                        rm = self.portfolio.pop(0)
+                        self.logger.info('Removing configuration from portfolio:\n%s', rm)
+                        self.dequeued.append(rm)
+                for inc in self.portfolio:
+                    self.logger.info(inc)
+                    config_cost_per_inst[inc] = self.predict_missing_data(
+                        self.candidate_configs_cost_per_inst[inc], inc, fit)
             else:
                 incs = incs[to_keep_ids][:self.incs_per_round]
 
@@ -401,6 +455,8 @@ class Hydra(object):
                 datetime.datetime.fromtimestamp(time.time()).strftime('%Y-%m-%d_%H:%M:%S_%f')))
             self.output_dir = create_output_directory(self.scenario, run_id=self.run_id, logger=self.logger)
         self.rh.save_json(fn=os.path.join(self.top_dir, 'all_validated_runs_runhistory.json'), save_external=True)
+        while self.dequeued and len(self.portfolio) < self.max_size:
+            self.portfolio.append(self.dequeued.pop(0))
         with open(os.path.join(self.top_dir, 'portfolio.pkl'), 'wb') as fh:
             pickle.dump(self.portfolio, fh)
         self.logger.info("~"*120)
@@ -426,14 +482,17 @@ class Hydra(object):
             The current cost of the portfolio
 
         """
+        self.cost_per_inst = None
         for kept in incs:
             if kept not in self.portfolio:
                 self.portfolio.append(kept)
-                cost_per_inst = config_cost_per_inst[kept]
-                if self.cost_per_inst:
-                    for key in cost_per_inst:
-                        self.cost_per_inst[key] = min(self.cost_per_inst[key], cost_per_inst[key])
-                else:
-                    self.cost_per_inst = cost_per_inst
+        # we have to recompute cost_per_inst for every new portfolio as we sometimes can throw out old configurations
+        for kept in self.portfolio:
+            cost_per_inst = config_cost_per_inst[kept]
+            if self.cost_per_inst:
+                for key in cost_per_inst:
+                    self.cost_per_inst[key] = min(self.cost_per_inst[key], cost_per_inst[key])
+            else:
+                self.cost_per_inst = cost_per_inst
         cur_cost = np.mean(list(self.cost_per_inst.values()))  # type: float
         return cur_cost

@@ -424,10 +424,14 @@ class CMDReader(object):
                               type=str.lower,
                               help="[dev] Validation mode. Only active in PSMAC or Hydra.")
         req_opts.add_argument("--hydra_mode",
-                              choices=['mip', 'standard', 'contribution'],
+                              choices=['mip', 'standard', 'contribution', 'rr'],
                               help="[dev] Portfolio construction mode.",
                               default='standard',
                               type=str.lower)
+        req_opts.add_argument("--hydra_max_size",
+                              help="[dev] Maximal portfolio size. size <= 0 ==> unbounded",
+                              default=0,
+                              type=int)
 
         self.main_cmd_actions, self.main_cmd_translations = CMDReader._extract_action_info(self.parser._actions)
 
