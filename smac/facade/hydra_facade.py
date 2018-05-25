@@ -110,7 +110,7 @@ class Hydra(object):
         self.scenario = scenario
         self.run_id, self.rng = get_rng(rng, run_id, self.logger)
         self.kwargs = kwargs
-        self.output_dir = None
+        self.output_dir = scenario.output_dir
         self.top_dir = None
         self.solver = None
         self.portfolio = None
@@ -368,6 +368,11 @@ class Hydra(object):
         if self.output_dir is None:
             self.top_dir = "hydra-output_%s" % (
                 datetime.datetime.fromtimestamp(time.time()).strftime('%Y-%m-%d_%H:%M:%S_%f'))
+            self.scenario.output_dir = os.path.join(self.top_dir, "psmac3-output_%s" % (
+                datetime.datetime.fromtimestamp(time.time()).strftime('%Y-%m-%d_%H:%M:%S_%f')))
+            self.output_dir = create_output_directory(self.scenario, run_id=self.run_id, logger=self.logger)
+        else:
+            self.top_dir = self.output_dir
             self.scenario.output_dir = os.path.join(self.top_dir, "psmac3-output_%s" % (
                 datetime.datetime.fromtimestamp(time.time()).strftime('%Y-%m-%d_%H:%M:%S_%f')))
             self.output_dir = create_output_directory(self.scenario, run_id=self.run_id, logger=self.logger)
