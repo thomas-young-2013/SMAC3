@@ -110,7 +110,7 @@ class Hydra(object):
         self.scenario = scenario
         self.run_id, self.rng = get_rng(rng, run_id, self.logger)
         self.kwargs = kwargs
-        self.output_dir = scenario.output_dir
+        self.output_dir = scenario.output_dir if not scenario.output_dir.startswith('smac') else None
         self.top_dir = None
         self.solver = None
         self.portfolio = None
