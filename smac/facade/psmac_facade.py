@@ -68,7 +68,7 @@ def optimize(queue: multiprocessing.Queue,
         solver.solver.runhistory.save_json(
             fn=os.path.join(solver.output_dir, "runhistory.json")
         )
-    queue.put((incumbent, rng))
+    queue.put(incumbent, block=False)
     queue.close()
     return incumbent
 
@@ -163,8 +163,6 @@ class PSMAC(object):
         -------
         incumbent(s) : Configuration / List[Configuration] / ndarray[Configuration]
             Incumbent / Portfolio of incumbents
-        pid(s) : int / ndarray[ints]
-            Process ID(s) from which the configuration stems
 
         """
         # Setup output directory
@@ -184,7 +182,7 @@ class PSMAC(object):
         self.logger.info("PSMAC run")
 
         # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ Multiprocessing part start ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ #
-        q = multiprocessing.Queue()
+        q = multiprocessing.Queue(maxsize=-1)
         procs = []
         for p in range(self.n_optimizers):
             proc = multiprocessing.Process(target=optimize,
@@ -201,12 +199,10 @@ class PSMAC(object):
         for proc in procs:
             proc.join()
         incs = np.empty((self.n_optimizers,), dtype=Configuration)
-        pids = np.empty((self.n_optimizers,), dtype=int)
         idx = 0
         while not q.empty():
-            conf, pid = q.get_nowait()
+            conf = q.get_nowait()
             incs[idx] = conf
-            pids[idx] = pid
             idx += 1
         self.logger.info('Loading all runhistories')
         # reads in all runs, stores in self.rh, needed to estimate best config
