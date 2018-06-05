@@ -52,25 +52,25 @@ def optimize(queue: multiprocessing.Queue,
 
     """
     logger = logging.getLogger('Worker_%d' % multiprocessing.current_process().pid)
-    logger.info('Alive!')
+    logger.info('Worker_%d: Alive!', multiprocessing.current_process().pid)
     tae = tae(ta=scenario.ta, run_obj=scenario.run_obj)
     solver = SMAC(scenario=scenario, tae_runner=tae, rng=rng, **kwargs)
     solver.stats.start_timing()
     solver.stats.print_stats()
 
-    logger.info('Starting SMAC')
+    logger.info('Worker_%d: Starting SMAC', multiprocessing.current_process().pid)
     incumbent = solver.solver.run()
     solver.stats.print_stats()
-    logger.info('SMAC done')
+    logger.info('Worker_%d: SMAC done', multiprocessing.current_process().pid)
 
     if output_dir is not None:
         solver.solver.runhistory.save_json(
             fn=os.path.join(solver.output_dir, "runhistory.json")
         )
-    logger.info('Pushing to queue')
+    logger.info('Worker_%d: Pushing to queue', multiprocessing.current_process().pid)
     queue.put(incumbent, block=False)
     queue.close()
-    logger.info('Pushed to queue')
+    logger.info('Worker_%d: Pushed to queue', multiprocessing.current_process().pid)
 
 
 class PSMAC(object):
@@ -194,7 +194,7 @@ class PSMAC(object):
                                                self.output_dir,  # directory to create outputs in
                                            ),
                                            kwargs=self.kwargs)
-            self.logger.info('Starting process: %d', proc.pid)
+            self.logger.info('Starting process: %d', p)
             proc.start()
             procs.append(proc)
         for proc in procs:
