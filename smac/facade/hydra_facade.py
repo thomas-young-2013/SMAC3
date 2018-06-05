@@ -4,6 +4,7 @@ import datetime
 import time
 import typing
 import copy
+import json
 from collections import defaultdict
 
 import pickle
@@ -67,6 +68,7 @@ class Hydra(object):
                  use_epm: bool=False,
                  mode: str='standard',
                  max_size: int=0,
+                 early_stopping: bool=False,
                  **kwargs):
         """
         Constructor
@@ -101,6 +103,8 @@ class Hydra(object):
             "else" -> Keep the k (estimated/validated) best configurations in each round
         max_size: int
             Maximum portfolio size. size <= 0 ==> unbounded portfolio size
+        early_stopping: bool
+            Flag to determine if early stopping is used if no progress between two iterations
 
         """
         self.logger = logging.getLogger(
@@ -134,6 +138,15 @@ class Hydra(object):
         self.mode = mode
         self.max_size = max_size if max_size >= 1 else MAXINT
         self.dequeued = []
+        self.stats = {
+            'iteration_wall_time': [],
+            'iteration_psmac_time': [],
+            'iteration_psmac_validate': [],
+            'wallclock_time': 0
+        }
+        self.early_stopping = early_stopping
+        self._start = time.time()
+        self._last_timed = self._start
 
     def _setup_model(self, scenario):
         """
@@ -376,6 +389,9 @@ class Hydra(object):
             self.scenario.output_dir = os.path.join(self.top_dir, "psmac3-output_%s" % (
                 datetime.datetime.fromtimestamp(time.time()).strftime('%Y-%m-%d_%H:%M:%S_%f')))
             self.output_dir = create_output_directory(self.scenario, run_id=self.run_id, logger=self.logger)
+        self.scenario.output_dir_for_this_run = self.top_dir
+        self.scenario.write()
+        self.scenario.output_dir_for_this_run = self.output_dir
 
         scen = copy.deepcopy(self.scenario)
         scen.output_dir_for_this_run = None
@@ -383,6 +399,9 @@ class Hydra(object):
         # parent process SMAC only used for validation purposes
         self.solver = SMAC(scenario=scen, tae_runner=self.tae, rng=self.rng, run_id=self.run_id, **self.kwargs)
         for i in range(self.n_iterations):
+            if i > 0:
+                self.stats['iteration_wall_time'].append(time.time() - self._last_timed)
+            self._last_timed = time.time()
             self.logger.info("="*120)
             self.logger.info("Hydra (%s) Iteration: %d", self.mode, (i + 1))
 
@@ -401,9 +420,11 @@ class Hydra(object):
             )
             self.optimizer.output_dir = self.output_dir
             incs = self.optimizer.optimize()  # all incumbents out of all runs
+            self.stats['iteration_psmac_time'].append(self.optimizer.stats)
             val = True if self.val_set else False
             val = False if self.mode == 'mip' else val
             to_keep_ids, cost_per_conf = self.optimizer.get_best_incumbents_ids(incs, val)
+            self.stats['iteration_psmac_validate'].append(self.optimizer.validation_stats)
             self.candidate_configs_cost_per_inst = {**self.candidate_configs_cost_per_inst,
                                                     **cost_per_conf}
             config_cost_per_inst = {}
@@ -415,6 +436,9 @@ class Hydra(object):
             elif self.mode == 'mip':
                 incs = incs[to_keep_ids][:self.incs_per_round]  # determine k best incumbents on SMAC estimates
                 _, cost_per_conf = self.optimizer.get_best_incumbents_ids(incs, True)  # validate only those incumbents
+                for key in self.optimizer.validation_stats:
+                    self.stats['iteration_psmac_validate'][-1][key] += self.optimizer.validation_stats[key]
+                self.optimizer.validation_stats = self.stats['iteration_psmac_validate'][-1]
             elif self.mode == 'rr':
                 space = self.max_size - (len(self.portfolio) + len(incs))
                 if self.dequeued:
@@ -430,6 +454,7 @@ class Hydra(object):
                         self.dequeued.append(rm)
             else:
                 incs = incs[to_keep_ids][:self.incs_per_round]
+            self.optimizer.save_stats(os.path.dirname(self.output_dir))
 
             read(self.rh, os.path.join(self.top_dir, 'psmac3*', 'run_*'), self.scenario.cs, self.logger)
             self.logger.info('Kept incumbents')
@@ -439,7 +464,7 @@ class Hydra(object):
                 self.candidate_configs_cost_per_inst[inc] = self.predict_missing_data(cost_per_conf[inc], inc, fit)
                 fit = False
             cur_portfolio_cost = self._update_portfolio(incs, self.candidate_configs_cost_per_inst)
-            if portfolio_cost <= cur_portfolio_cost:
+            if self.early_stopping and portfolio_cost <= cur_portfolio_cost:
                 self.logger.info("No further progress (%f) --- terminate hydra", portfolio_cost)
                 break
             else:
@@ -449,10 +474,15 @@ class Hydra(object):
             # modify TAE such that it return oracle performance
             self.tae = ExecuteTARunHydra(ta=self.scenario.ta, run_obj=self.scenario.run_obj,
                                          cost_oracle=self.cost_per_inst, tae=self._tae)
+            with open(os.path.join(self.scenario.output_dir, 'portfolio.pkl'), 'wb') as fh:
+                pickle.dump(self.portfolio, fh)
+            self.stats['wallclock_time'] = time.time() - self._start
+            self.print_stats(i+1)
 
             self.scenario.output_dir = os.path.join(self.top_dir, "psmac3-output_%s" % (
                 datetime.datetime.fromtimestamp(time.time()).strftime('%Y-%m-%d_%H:%M:%S_%f')))
             self.output_dir = create_output_directory(self.scenario, run_id=self.run_id, logger=self.logger)
+        self.stats['iteration_wall_time'].append(time.time() - self._last_timed)
         self.rh.save_json(fn=os.path.join(self.top_dir, 'all_validated_runs_runhistory.json'), save_external=True)
         while self.dequeued and len(self.portfolio) < self.max_size:
             self.portfolio.append(self.dequeued.pop(0))
@@ -462,9 +492,44 @@ class Hydra(object):
         self.logger.info('Resulting Portfolio:')
         for configuration in self.portfolio:
             self.logger.info(str(configuration))
-        self.logger.info("~"*120)
-
+        self.stats['wallclock_time'] = time.time() - self._start
+        self.print_stats(i+1)
+        with open(os.path.join(self.top_dir, 'stats.json'), 'w') as fh:
+            json.dump(self.stats, fh, indent=4, sort_keys=True)
         return self.portfolio
+
+    def print_stats(self, iteration):
+        self.logger.info("~"*120)
+        self.logger.info("*"*120)
+        self.logger.info("~Statistics:")
+        self.logger.info("*Incumbent changed: %d",
+                         sum(list(map(lambda x: x['cumulative']['inc_changed'], self.stats['iteration_psmac_time'])))
+                         )  # first change is default conf
+        self.logger.info("~Target algorithm runs: %d",
+                         sum(list(map(lambda x: x['cumulative']['ta_runs'], self.stats['iteration_psmac_time'])))
+                         +
+                         sum(list(map(lambda x: x['ta_runs'], self.stats['iteration_psmac_validate'])))
+                         )
+        self.logger.info("*Used target algorithm runtime: %.2f",
+                         sum(list(map(lambda x: x['cumulative']['ta_time_used'], self.stats['iteration_psmac_time'])))
+                         +
+                         sum(list(map(lambda x: x['ta_time_used'], self.stats['iteration_psmac_validate'])))
+                         )
+        self.logger.info('~Time spent validating: %.2f',
+                         sum(list(map(lambda x: x['wallclock_time_used'], self.stats['iteration_psmac_validate'])))
+                         )
+        self.logger.info("*Configurations (counted duplicates!): %d",
+                         sum(list(map(lambda x: x['cumulative']['n_configs'], self.stats['iteration_psmac_time'])))
+                         )
+        self.logger.info(
+            "~Used wallclock time: %.2f / %.2f sec ", time.time() - self._start, np.float('inf'))
+        self.logger.info('*Hydra Iterations: %d / %d', iteration, self.n_iterations)
+        self.logger.info('~SMAC runs: %d', iteration*self.n_optimizers)
+        self.stats['iterations'] = iteration
+        self.stats['#smac'] = iteration*self.n_optimizers
+        self.stats['#smac_per_iteration'] = self.n_optimizers
+        self.logger.info("*"*120)
+        self.logger.info("~"*120)
 
     def _update_portfolio(self, incs: np.ndarray, config_cost_per_inst: typing.Dict) -> typing.Union[np.float, float]:
         """

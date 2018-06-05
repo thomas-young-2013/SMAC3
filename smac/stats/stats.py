@@ -61,6 +61,17 @@ class Stats(object):
         if not self.__scenario.output_dir_for_this_run:
             self._logger.debug("No scenario.output_dir: not saving stats!")
             return
+
+        data = self.get_savable_data()
+
+        path = os.path.join(
+            self.__scenario.output_dir_for_this_run, "stats.json"
+        )
+        self._logger.debug("Saving stats to %s", path)
+        with open(path, 'w') as fh:
+            json.dump(data, fh)
+
+    def get_savable_data(self):
         # Set used_wallclock_time
         self.wallclock_time_used = self.get_used_wallclock_time()
 
@@ -69,13 +80,7 @@ class Stats(object):
         for v in vars(self):
             if not v in ['_Stats__scenario', '_logger', '_start_time']:
                 data[v] = getattr(self, v)
-
-        path = os.path.join(
-            self.__scenario.output_dir_for_this_run, "stats.json"
-        )
-        self._logger.debug("Saving stats to %s", path)
-        with open(path, 'w') as fh:
-            json.dump(data, fh)
+        return data
 
     def load(self, fn=None):
         """

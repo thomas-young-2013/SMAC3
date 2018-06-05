@@ -5,7 +5,7 @@ import time
 import typing
 import copy
 
-import pickle
+import json
 import multiprocessing
 
 import numpy as np
@@ -68,7 +68,7 @@ def optimize(queue: multiprocessing.Queue,
             fn=os.path.join(solver.output_dir, "runhistory.json")
         )
     logger.info('Worker_%d: Pushing to queue', multiprocessing.current_process().pid)
-    queue.put(incumbent, block=False)
+    queue.put((incumbent, solver.stats.get_savable_data()), block=False)
     queue.close()
     logger.info('Worker_%d: Pushed to queue', multiprocessing.current_process().pid)
 
@@ -100,8 +100,8 @@ class PSMAC(object):
                  validate: bool = True,
                  n_optimizers: int = 2,
                  val_set: typing.Union[typing.List[str], None] = None,
-                 n_incs: int=1,
-                 use_epm: bool=False,
+                 n_incs: int = 1,
+                 use_epm: bool = False,
                  **kwargs):
         """
         Constructor
@@ -154,6 +154,43 @@ class PSMAC(object):
         else:
             self.val_set = val_set
         self.use_epm = use_epm
+        self.stats = {
+            'wallclock_time_used': 0,
+            'cumulative':
+                {
+                    'ta_runs': 0,
+                    'n_configs': 0,
+                    'ta_time_used': 0,
+                    'inc_changed': 0
+                },
+            'individual':
+                {
+                    'ta_runs': [],
+                    'n_configs': [],
+                    'ta_time_used': [],
+                    'inc_changed': []
+                }
+        }
+        self.validation_stats = {
+            'ta_runs': 0,
+            'n_configs': 0,
+            'wallclock_time_used': 0,
+            'ta_time_used': 0,
+            'inc_changed': 0
+        }
+
+    def _update_stats(self, stats):
+        self.stats['wallclock_time_used'] = max(self.stats['wallclock_time_used'],
+                                                stats['wallclock_time_used'])
+        for key in self.stats['cumulative']:
+            self.stats['cumulative'][key] += stats[key]
+            self.stats['individual'][key].append(stats[key])
+
+    def save_stats(self, path):
+        path = os.path.join(path, 'stats.json')
+        self.logger.debug("Saving stats to %s", path)
+        with open(path, 'w') as fh:
+            json.dump({'stats': self.stats, 'validation': self.validation_stats}, fh, indent=4, sort_keys=True)
 
     def optimize(self):
         """
@@ -201,8 +238,10 @@ class PSMAC(object):
         idx = 0
         self.logger.info('Emptying Queue')
         while idx < self.n_optimizers:
-            conf = q.get()
+            conf, stats = q.get()
+            # self.logger.info('Stats: %s', str(stats))
             self.logger.info('Received Config')
+            self._update_stats(stats)
             incs[idx] = conf
             idx += 1
         for proc in procs:
@@ -221,7 +260,7 @@ class PSMAC(object):
             return incs[ids]
 
     def get_best_incumbents_ids(self, incs: typing.Union[typing.List[Configuration], np.ndarray],
-                                validate: bool=True):
+                                validate: bool = True):
         """
         Determines the IDs and costs of the best configurations
 
@@ -285,4 +324,5 @@ class PSMAC(object):
                                  repetitions=1,
                                  use_epm=self.use_epm,
                                  n_jobs=self.n_optimizers)
+        self.validation_stats = solver.solver.intensifier.tae_runner.stats.get_savable_data()
         return new_rh
