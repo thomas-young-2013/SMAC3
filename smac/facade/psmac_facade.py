@@ -197,16 +197,17 @@ class PSMAC(object):
             self.logger.info('Starting process: %d', p)
             proc.start()
             procs.append(proc)
-        for proc in procs:
-            self.logger.info('Joining process: %d', proc.pid)
-            proc.join()
         incs = np.empty((self.n_optimizers,), dtype=Configuration)
         idx = 0
         self.logger.info('Emptying Queue')
-        while not q.empty():
-            conf = q.get_nowait()
+        while idx < self.n_optimizers:
+            conf = q.get()
+            self.logger.info('Received Config')
             incs[idx] = conf
             idx += 1
+        for proc in procs:
+            self.logger.info('Joining process: %d', proc.pid)
+            proc.join()
         self.logger.info('Queue empty')
         self.logger.info('Loading all runhistories')
         # reads in all runs, stores in self.rh, needed to estimate best config
