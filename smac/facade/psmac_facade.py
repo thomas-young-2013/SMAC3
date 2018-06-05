@@ -33,7 +33,7 @@ def optimize(queue: multiprocessing.Queue,
              tae: typing.Type[ExecuteTARun],
              rng: typing.Union[np.random.RandomState, int],
              output_dir: str,
-             **kwargs) -> Configuration:
+             **kwargs) -> None:
     """
     Unbound method to be called in a subprocess
 
@@ -50,27 +50,27 @@ def optimize(queue: multiprocessing.Queue,
     output_dir: str
         The directory in which each smac run should write it's results
 
-    Returns
-    -------
-    incumbent: Configuration
-        The incumbent configuration of this run
-
     """
+    logger = logging.getLogger('Worker_%d' % multiprocessing.current_process().pid)
+    logger.info('Alive!')
     tae = tae(ta=scenario.ta, run_obj=scenario.run_obj)
     solver = SMAC(scenario=scenario, tae_runner=tae, rng=rng, **kwargs)
     solver.stats.start_timing()
     solver.stats.print_stats()
 
+    logger.info('Starting SMAC')
     incumbent = solver.solver.run()
     solver.stats.print_stats()
+    logger.info('SMAC done')
 
     if output_dir is not None:
         solver.solver.runhistory.save_json(
             fn=os.path.join(solver.output_dir, "runhistory.json")
         )
+    logger.info('Pushing to queue')
     queue.put(incumbent, block=False)
     queue.close()
-    return incumbent
+    logger.info('Pushed to queue')
 
 
 class PSMAC(object):
@@ -194,16 +194,20 @@ class PSMAC(object):
                                                self.output_dir,  # directory to create outputs in
                                            ),
                                            kwargs=self.kwargs)
+            self.logger.info('Starting process: %d', proc.pid)
             proc.start()
             procs.append(proc)
         for proc in procs:
+            self.logger.info('Joining process: %d', proc.pid)
             proc.join()
         incs = np.empty((self.n_optimizers,), dtype=Configuration)
         idx = 0
+        self.logger.info('Emptying Queue')
         while not q.empty():
             conf = q.get_nowait()
             incs[idx] = conf
             idx += 1
+        self.logger.info('Queue empty')
         self.logger.info('Loading all runhistories')
         # reads in all runs, stores in self.rh, needed to estimate best config
         read(self.rh, self.scenario.input_psmac_dirs, self.scenario.cs, self.logger)
