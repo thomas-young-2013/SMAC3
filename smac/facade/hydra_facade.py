@@ -419,15 +419,19 @@ class Hydra(object):
                 **self.kwargs
             )
             self.optimizer.output_dir = self.output_dir
+            self.logger.info('Hydra running psmac')
             incs = self.optimizer.optimize()  # all incumbents out of all runs
+            self.logger.info('Hydra received %d configurations', len(incs))
             self.stats['iteration_psmac_time'].append(self.optimizer.stats)
             val = True if self.val_set else False
             val = False if self.mode == 'mip' else val
+            self.logger.info('Validation of incumbents according to mode')
             to_keep_ids, cost_per_conf = self.optimizer.get_best_incumbents_ids(incs, val)
+            self.logger.info('Validation done')
             self.stats['iteration_psmac_validate'].append(self.optimizer.validation_stats)
             self.candidate_configs_cost_per_inst = {**self.candidate_configs_cost_per_inst,
                                                     **cost_per_conf}
-            config_cost_per_inst = {}
+            self.logger.info('Evolving portfolio with rule %s', self.mode)
             if self.mode == 'contribution':
                 incs = self.get_contributing_configurations(list(self.candidate_configs_cost_per_inst.keys()),
                                                             list(self.candidate_configs_cost_per_inst.keys()))
@@ -435,13 +439,16 @@ class Hydra(object):
                 cost_per_conf = self.candidate_configs_cost_per_inst
             elif self.mode == 'mip':
                 incs = incs[to_keep_ids][:self.incs_per_round]  # determine k best incumbents on SMAC estimates
+                self.logger.info('Real validation for mip')
                 _, cost_per_conf = self.optimizer.get_best_incumbents_ids(incs, True)  # validate only those incumbents
+                self.logger.info('Done')
                 for key in self.optimizer.validation_stats:
                     self.stats['iteration_psmac_validate'][-1][key] += self.optimizer.validation_stats[key]
                 self.optimizer.validation_stats = self.stats['iteration_psmac_validate'][-1]
             elif self.mode == 'rr':
                 space = self.max_size - (len(self.portfolio) + len(incs))
                 if self.dequeued:
+                    self.logger.info('Checking dequeued configurations')
                     deq = np.array(self.dequeued)
                     self.dequeued = []
                     incs = self.get_contributing_configurations(self.portfolio, np.hstack((incs, deq)))
