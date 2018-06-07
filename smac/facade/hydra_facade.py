@@ -269,9 +269,9 @@ class Hydra(object):
                     if best_c:
                         prev_best = best
                     best = self.candidate_configs_cost_per_inst[config][instance]
-                    if best >= self.scenario.cutoff:
-                        best = self.scenario.cutoff * self.scenario.par_factor
                     best_c = config
+            if best >= self.scenario.cutoff:
+                best = self.scenario.cutoff * self.scenario.par_factor
 
             contribution[best_c] += 1
             # For stochastic update of the mean
@@ -320,7 +320,7 @@ class Hydra(object):
         """
         # portfolio = candidates => we want to find the best portfolio from all possible candidates
         results = self.get_contribution(portfolio, candidates)
-        results_ids = list(map(lambda x: x[0], enumerate(sorted(results, key=lambda y: y[1], reverse=True))))
+        results_ids = list(map(lambda x: x[0], sorted(enumerate(results), key=lambda y: y[1][1], reverse=True)))
         results = np.array(results)[results_ids]
         stop = np.argmin(results[:, 1])
         stop = np.min((self.max_size, stop))
