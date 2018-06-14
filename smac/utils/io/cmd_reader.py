@@ -432,6 +432,9 @@ class CMDReader(object):
                               help="[dev] Maximal portfolio size. size <= 0 ==> unbounded",
                               default=0,
                               type=int)
+        req_opts.add_argument("--hydra_marginal_contrib",
+                              action="store_true",
+                              help="[dev] Marginal Contribution Mode.")
 
         self.main_cmd_actions, self.main_cmd_translations = CMDReader._extract_action_info(self.parser._actions)
 

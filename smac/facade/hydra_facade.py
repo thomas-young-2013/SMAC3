@@ -69,6 +69,7 @@ class Hydra(object):
                  mode: str='standard',
                  max_size: int=0,
                  early_stopping: bool=False,
+                 marginal_contrib: bool=False,
                  **kwargs):
         """
         Constructor
@@ -105,6 +106,8 @@ class Hydra(object):
             Maximum portfolio size. size <= 0 ==> unbounded portfolio size
         early_stopping: bool
             Flag to determine if early stopping is used if no progress between two iterations
+        marginal_contrib:
+            If mode is contribution use classical marginal contribution else use new contribution
 
         """
         self.logger = logging.getLogger(
@@ -138,6 +141,7 @@ class Hydra(object):
         self.mode = mode
         self.max_size = max_size if max_size >= 1 else MAXINT
         self.dequeued = []
+        self.marginal_contrib = marginal_contrib
         self.stats = {
             'iteration_wall_time': [],
             'iteration_psmac_time': [],
@@ -299,7 +303,7 @@ class Hydra(object):
         self.logger.info(';,.,;'*24)
         return results
 
-    def get_contributing_configurations(self,
+    def get_marginal_contribution(self,
                                         portfolio: typing.List[Configuration],
                                         candidates: typing.List[Configuration]):
         """
@@ -315,11 +319,61 @@ class Hydra(object):
         Returns
         -------
         list
-            Configurations (all candidates) sorted by their contribution to the oracle
+            (max_size) Configurations sorted by their marginal contribution
+
+        """
+        contribution = defaultdict(float)
+        for instance in self.val_set:
+            best_port = float(self.scenario.cutoff * self.scenario.par_factor)
+            for conf in portfolio:
+                best_port = np.min((best_port, self.candidate_configs_cost_per_inst[conf][instance]))
+            best = -1
+            bimp = -np.float('inf')
+            for c_idx, conf in enumerate(candidates):
+                cont = best_port - self.candidate_configs_cost_per_inst[conf][instance]
+                if cont > bimp:
+                    best = c_idx
+                    bimp = cont
+            contribution[candidates[best]] = bimp
+        self.logger.info(';,.,;'*24)
+        self.logger.info('Contributions: ')
+        results = []
+        for conf in candidates:
+            self.logger.info(conf)
+            contribution[conf] /= len(self.val_set)
+            results.append((conf, contribution[conf]))
+            self.logger.info('%6.3f', contribution[conf])
+            self.logger.info(' ')
+        self.logger.info(';,.,;'*24)
+        return results
+
+    def get_contributing_configurations(self,
+                                        portfolio: typing.List[Configuration],
+                                        candidates: typing.List[Configuration],
+                                        marginal: bool=False):
+        """
+        Construct portfolio only from configurations that contribute to the overall improvement
+
+        Parameters
+        ----------
+        portfolio: typing.List[Configuration]
+            Already existing portfolio
+        candidates: typing.List[Configuration]
+            Potential candidates to extend portfolio
+        marginal: bool
+            Flag to determine which contribution method to use
+
+        Returns
+        -------
+        list
+            Configurations (max_size) sorted by their contribution to the oracle
 
         """
         # portfolio = candidates => we want to find the best portfolio from all possible candidates
-        results = self.get_contribution(portfolio, candidates)
+        if marginal:
+            results = self.get_marginal_contribution(portfolio, candidates)
+        else:
+            results = self.get_contribution(portfolio, candidates)
         results_ids = list(map(lambda x: x[0], sorted(enumerate(results), key=lambda y: y[1][1], reverse=True)))
         results = np.array(results)[results_ids]
         stop = np.argmin(results[:, 1])
@@ -403,7 +457,10 @@ class Hydra(object):
                 self.stats['iteration_wall_time'].append(time.time() - self._last_timed)
             self._last_timed = time.time()
             self.logger.info("="*120)
-            self.logger.info("Hydra (%s) Iteration: %d", self.mode, (i + 1))
+            mode_str = self.mode
+            if self.marginal_contrib:
+                mode_str += '-marginal_contrib'
+            self.logger.info("Hydra (%s) Iteration: %d", mode_str, (i + 1))
 
             self.optimizer = PSMAC(
                 scenario=self.scenario,
@@ -432,11 +489,16 @@ class Hydra(object):
             self.candidate_configs_cost_per_inst = {**self.candidate_configs_cost_per_inst,
                                                     **cost_per_conf}
             self.logger.info('Evolving portfolio with rule %s', self.mode)
-            if self.mode == 'contribution':
+            if self.mode == 'contribution' and not self.marginal_contrib:
                 incs = self.get_contributing_configurations(list(self.candidate_configs_cost_per_inst.keys()),
-                                                            list(self.candidate_configs_cost_per_inst.keys()))
+                                                            list(self.candidate_configs_cost_per_inst.keys()),
+                                                            False)
                 self.portfolio = []  # reset the portfolio as incs contain all needed configurations!
                 cost_per_conf = self.candidate_configs_cost_per_inst
+            elif self.mode == 'contribution':
+                incs = self.get_contributing_configurations(self.portfolio,
+                                                            incs,
+                                                            True)
             elif self.mode == 'mip':
                 incs = incs[to_keep_ids][:self.incs_per_round]  # determine k best incumbents on SMAC estimates
                 self.logger.info('Real validation for mip')
@@ -453,11 +515,13 @@ class Hydra(object):
                     deq = np.array(self.dequeued)
                     self.dequeued = []
                     incs = self.get_contributing_configurations(self.portfolio,
-                                                                np.hstack((incs, deq)))[:self.incs_per_round]
+                                                                np.hstack((incs, deq)),
+                                                                self.marginal_contrib)[:self.incs_per_round]
                 else:
                     incs = self.get_contributing_configurations(
                         list(self.candidate_configs_cost_per_inst.keys()),
-                        list(self.candidate_configs_cost_per_inst.keys()))[:self.max_size]
+                        list(self.candidate_configs_cost_per_inst.keys()),
+                        self.marginal_contrib)[:self.max_size]
                 if len(self.portfolio) + len(incs) > self.max_size:
                     while len(self.portfolio) + len(incs) > self.max_size:
                         self.logger.info('Removing configuration from portfolio:\n%s', self.portfolio[0])

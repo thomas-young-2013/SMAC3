@@ -145,7 +145,8 @@ class SMACCLI(object):
                 use_epm=main_args_.validation_mode == "epm",
                 n_optimizers=main_args_.hydra_n_optimizers,
                 mode=main_args_.hydra_mode,
-                max_size=main_args_.hydra_max_size
+                max_size=main_args_.hydra_max_size,
+                marginal_contrib=main_args_.hydra_marginal_contrib
             )
         elif main_args_.mode == "PSMAC":
             optimizer = PSMAC(
