@@ -435,6 +435,9 @@ class CMDReader(object):
         req_opts.add_argument("--hydra_marginal_contrib",
                               action="store_true",
                               help="[dev] Marginal Contribution Mode.")
+        req_opts.add_argument("--hydra_relaxed",
+                              action="store_true",
+                              help="[dev] Relaxed TAE for Hydra.")
 
         self.main_cmd_actions, self.main_cmd_translations = CMDReader._extract_action_info(self.parser._actions)
 

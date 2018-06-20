@@ -70,6 +70,7 @@ class Hydra(object):
                  max_size: int=0,
                  early_stopping: bool=False,
                  marginal_contrib: bool=False,
+                 relaxed: bool=False,
                  **kwargs):
         """
         Constructor
@@ -106,8 +107,10 @@ class Hydra(object):
             Maximum portfolio size. size <= 0 ==> unbounded portfolio size
         early_stopping: bool
             Flag to determine if early stopping is used if no progress between two iterations
-        marginal_contrib:
+        marginal_contrib: bool
             If mode is contribution use classical marginal contribution else use new contribution
+        relaxed: bool
+            Flag to determine if relaxed TAE is used or not
 
         """
         self.logger = logging.getLogger(
@@ -124,6 +127,7 @@ class Hydra(object):
         self.model = None
         self.runhistory2epm = None
         self.rh = RunHistory(average_cost)
+        self.relaxed = relaxed
         self._tae = tae
         self.tae = tae(ta=self.scenario.ta, run_obj=self.scenario.run_obj)
         if incs_per_round <= 0:
@@ -135,7 +139,7 @@ class Hydra(object):
         self.val_set = self._get_validation_set(val_set)
         self.cost_per_inst = {}
         self.optimizer = None
-        self.portfolio_cost = None
+        self.portfolio_cost_per_inst = defaultdict(list)
         self.use_epm = use_epm
         self.candidate_configs_cost_per_inst = {}
         self.mode = mode
@@ -455,10 +459,16 @@ class Hydra(object):
         for i in range(self.n_iterations):
             if i > 0:
                 self.stats['iteration_wall_time'].append(time.time() - self._last_timed)
+                if self.relaxed:
+                    tae = partial(ExecuteTARunHydra, portfolio=self.portfolio_cost_per_inst)
+                else:
+                    tae = partial(ExecuteTARunHydra, cost_oracle=self.cost_per_inst)
+            else:
+                tae = self._tae
             self._last_timed = time.time()
             self.logger.info("="*120)
             mode_str = self.mode
-            if self.marginal_contrib:
+            if self.marginal_contrib and self.mode in ['rr', 'contribution']:
                 mode_str += '-marginal_contrib'
             self.logger.info("Hydra (%s) Iteration: %d", mode_str, (i + 1))
 
@@ -466,7 +476,7 @@ class Hydra(object):
                 scenario=self.scenario,
                 run_id=self.run_id,
                 rng=self.rng,
-                tae=self._tae if i == 0 else partial(ExecuteTARunHydra, cost_oracle=self.cost_per_inst),
+                tae=tae,
                 shared_model=False,
                 validate=True if self.val_set else False,
                 n_optimizers=self.n_optimizers,
@@ -547,9 +557,6 @@ class Hydra(object):
                 portfolio_cost = cur_portfolio_cost
                 self.logger.info("Current pertfolio cost: %f", portfolio_cost)
 
-            # modify TAE such that it return oracle performance
-            self.tae = ExecuteTARunHydra(ta=self.scenario.ta, run_obj=self.scenario.run_obj,
-                                         cost_oracle=self.cost_per_inst, tae=self._tae)
             with open(os.path.join(self.scenario.output_dir, 'portfolio.pkl'), 'wb') as fh:
                 pickle.dump(self.portfolio, fh)
             self.stats['wallclock_time'] = time.time() - self._start
@@ -622,7 +629,8 @@ class Hydra(object):
             The current cost of the portfolio
 
         """
-        self.cost_per_inst = None
+        self.cost_per_inst = {}
+        self.portfolio_cost_per_inst = defaultdict(list)
         for kept in incs:
             if kept not in self.portfolio:
                 self.portfolio.append(kept)
@@ -632,7 +640,10 @@ class Hydra(object):
             if self.cost_per_inst:
                 for key in cost_per_inst:
                     self.cost_per_inst[key] = min(self.cost_per_inst[key], cost_per_inst[key])
+                    self.portfolio_cost_per_inst[key].append(cost_per_inst[key])
             else:
-                self.cost_per_inst = cost_per_inst
+                for key in cost_per_inst:
+                    self.cost_per_inst[key] = cost_per_inst[key]
+                    self.portfolio_cost_per_inst[key].append(cost_per_inst[key])
         cur_cost = np.mean(list(self.cost_per_inst.values()))  # type: float
         return cur_cost
