@@ -511,6 +511,8 @@ class Hydra(object):
                 incs = self.get_contributing_configurations(self.portfolio,
                                                             incs,
                                                             True)
+                self.portfolio = []  # reset the portfolio as incs contain all needed configurations!
+                cost_per_conf = self.candidate_configs_cost_per_inst
             elif self.mode == 'mip':
                 incs = incs[to_keep_ids][:self.incs_per_round]  # determine k best incumbents on SMAC estimates
                 self.logger.info('Real validation for mip')
