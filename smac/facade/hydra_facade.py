@@ -381,6 +381,8 @@ class Hydra(object):
         results_ids = list(map(lambda x: x[0], sorted(enumerate(results), key=lambda y: y[1][1], reverse=True)))
         results = np.array(results)[results_ids]
         stop = np.argmin(results[:, 1])
+        if stop == 0:
+            stop = self.max_size
         stop = np.min((self.max_size, stop))
         return results[:, 0][:stop]
 
