@@ -33,7 +33,7 @@ class TestPSMACFacade(unittest.TestCase):
         self.assertEquals(len(incs), 2)
         optimizer = PSMAC(self.scenario, n_optimizers=1, n_incs=4, validate=False)
         incs = optimizer.optimize()
-        self.assertEquals(len(incs), 1)
+        self.assertEquals(len(incs), 2)
         optimizer = PSMAC(self.scenario, n_optimizers=5, n_incs=4, validate=False)
         incs = optimizer.optimize()
         self.assertEquals(len(incs), 4)
