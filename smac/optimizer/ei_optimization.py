@@ -2,6 +2,7 @@ import abc
 import logging
 import time
 import numpy as np
+from itertools import chain
 
 from typing import Iterable, List, Union, Tuple, Optional
 
@@ -141,6 +142,56 @@ class AcquisitionFunctionMaximizer(object, metaclass=abc.ABCMeta):
         # rand_configs list, because the second is a pure python list
         return [(acq_values[ind][0], configs[ind]) for ind in indices[::-1]]
 
+class FiniteSearch(AcquisitionFunctionMaximizer):
+    """
+    Search over a finite list of configurations
+    
+    Parameters
+    ----------
+    
+    config_space : ~smac.configspace.ConfigurationSpace
+    
+    list_of_configs: List[~smac.configspace.Configuration]
+    
+    acquisition_function : Optional[~smac.optimizer.acquisition.AbstractAcquisitionFunction]
+        if acquisition_function is not passed, 
+        only random search will be used
+    
+    rng : np.random.RandomState or int, optional
+    
+    """
+    
+    def __init__(self,
+                 config_space: ConfigurationSpace,
+                 list_of_configs: List[Configuration],
+                 acquisition_function: Optional[AbstractAcquisitionFunction]=None,
+                 rng: Union[bool, np.random.RandomState] = None,
+                 ):
+        super().__init__(acquisition_function, config_space, rng)
+        self.list_of_configs = list_of_configs
+        
+    def _maximize(
+            self,
+            runhistory: RunHistory,
+            stats: Stats,
+            num_points: int,
+            **kwargs
+    ) -> Iterable[Tuple[float, Configuration]]:
+        
+        # inplace shuffling for random search
+        self.rng.shuffle(self.list_of_configs)
+        
+        if self.acquisition_function:
+            acq_list = self.acquisition_function(self.list_of_configs).tolist()
+            acq_conf_list = list(zip(acq_list,self.list_of_configs))
+            acq_conf_list = sorted(acq_conf_list,key=lambda x: x[0])
+            acq_conf_list = [l[1] for l in acq_conf_list]
+            # interleave
+            challenger_list = list(chain.from_iterable(zip(acq_conf_list, self.list_of_configs)))
+        else:
+            challenger_list = self.list_of_configs
+            
+        return [[0,c] for c in challenger_list]
 
 class LocalSearch(AcquisitionFunctionMaximizer):
 
