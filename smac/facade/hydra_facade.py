@@ -17,6 +17,7 @@ from ConfigSpace.configuration_space import Configuration
 from smac.tae.execute_ta_run_hydra import ExecuteTARunHydra
 from smac.tae.execute_ta_run_hydra import ExecuteTARunOld
 from smac.tae.execute_ta_run_hydra import ExecuteTARun
+from smac.tae.execute_askl_surrogate_run import ExecuteASKLRun
 from smac.scenario.scenario import Scenario
 from smac.facade.smac_facade import SMAC
 from smac.facade.psmac_facade import PSMAC
@@ -128,8 +129,13 @@ class Hydra(object):
         self.runhistory2epm = None
         self.rh = RunHistory(average_cost)
         self.relaxed = relaxed
-        self._tae = tae
-        self.tae = tae(ta=self.scenario.ta, run_obj=self.scenario.run_obj)
+        if not self.scenario.ta:
+            self._tae = ExecuteASKLRun
+            self.tae = ExecuteASKLRun(ta=[''], run_obj=self.scenario.run_obj)
+            self.scenario.cs = self.tae.surro.get_configuration_space()
+        else:
+            self._tae = tae
+            self.tae = tae(ta=self.scenario.ta, run_obj=self.scenario.run_obj)
         if incs_per_round <= 0:
             self.logger.warning('Invalid value in %s: %d. Setting to 1', 'incs_per_round', incs_per_round)
         self.incs_per_round = max(incs_per_round, 1)
@@ -462,9 +468,9 @@ class Hydra(object):
             if i > 0:
                 self.stats['iteration_wall_time'].append(time.time() - self._last_timed)
                 if self.relaxed:
-                    tae = partial(ExecuteTARunHydra, portfolio=self.portfolio_cost_per_inst)
+                    tae = partial(ExecuteTARunHydra, portfolio=self.portfolio_cost_per_inst, tae=self._tae)
                 else:
-                    tae = partial(ExecuteTARunHydra, cost_oracle=self.cost_per_inst)
+                    tae = partial(ExecuteTARunHydra, cost_oracle=self.cost_per_inst, tae=self._tae)
             else:
                 tae = self._tae
             self._last_timed = time.time()
