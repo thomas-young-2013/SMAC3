@@ -420,12 +420,19 @@ class Hydra(object):
                 self.model.train(X, y)
             for inst in self.scenario.train_insts:
                 if inst not in self.val_set and inst not in cost_per_inst:
-                    pred = self.model.predict(
-                        np.array([
-                            np.hstack([
-                                convert_configurations_to_array([config])[0],
-                                self.scenario.feature_dict[inst]]
-                            )]))[0].flatten()[0]
+                    if self.scenario.feature_dict:
+                        pred = self.model.predict(
+                            np.array([
+                                np.hstack([
+                                    convert_configurations_to_array([config])[0],
+                                    self.scenario.feature_dict[inst]]
+                                )]))[0].flatten()[0]
+                    else:
+                        pred = self.model.predict(
+                            np.array([
+                                np.hstack([
+                                    convert_configurations_to_array([config])[0]]
+                                )]))[0].flatten()[0]
                     if self.scenario.run_obj == "runtime":
                         pred = np.power(10, pred)
                     cost_per_inst[inst] = pred
