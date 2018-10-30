@@ -49,21 +49,5 @@ class ExecuteASKLRun(ExecuteTARunAClib):
             results['status'] = stat
         except:
             stderr_ = traceback.format_exc()
-        #
-        # log_func = print
-        # log_func("##########################################################")
-        # log_func("Statistics:")
-        # log_func("#Incumbent changed: %d" %(self.stats.inc_changed - 1)) # first change is default conf
-        # log_func("#Target algorithm runs: %d / %s" %(self.stats.ta_runs, str(9)))
-        # log_func("#Configurations: %d" %(self.stats.n_configs))
-        # # log_func("Used wallclock time: %.2f / %.2f sec " %(time.time() - self._start_time, self.__scenario.wallclock_limit))
-        # log_func("Used target algorithm runtime: %.2f / %.2f sec" %(self.stats.ta_time_used, 9))
-        # log_func(self.stats.is_budget_exhausted(), self.stats.get_remaining_ta_budget())
-        # # self._logger.debug("Debug Statistics:")
-        # # if self._n_calls_of_intensify > 0:
-        # #     self._logger.debug("Average Configurations per Intensify: %.2f" %(self.stats._n_configs_per_intensify / self.stats._n_calls_of_intensify))
-        # #     self._logger.debug("Exponential Moving Average of Configurations per Intensify: %.2f" %(self.stats._ema_n_configs_per_intensifiy))
-        #
-        # log_func("##########################################################")
 
         return results, stdout_, stderr_

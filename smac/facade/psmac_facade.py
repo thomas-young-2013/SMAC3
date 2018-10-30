@@ -323,4 +323,5 @@ class PSMAC(object):
                                  use_epm=self.use_epm,
                                  n_jobs=self.n_optimizers)
         self.validation_stats = solver.solver.intensifier.tae_runner.stats.get_savable_data()
+        del solver
         return new_rh
