@@ -60,18 +60,18 @@ class Hydra(object):
     def __init__(self,
                  scenario: typing.Type[Scenario],
                  n_iterations: int,
-                 val_set: str='train',
-                 incs_per_round: int=1,
-                 n_optimizers: int=1,
-                 rng: typing.Optional[typing.Union[np.random.RandomState, int]]=None,
-                 run_id: int=1,
-                 tae: typing.Type[ExecuteTARun]=ExecuteTARunOld,
-                 use_epm: bool=False,
-                 mode: str='standard',
-                 max_size: int=0,
-                 early_stopping: bool=False,
-                 marginal_contrib: bool=False,
-                 relaxed: bool=False,
+                 val_set: str = 'train',
+                 incs_per_round: int = 1,
+                 n_optimizers: int = 1,
+                 rng: typing.Optional[typing.Union[np.random.RandomState, int]] = None,
+                 run_id: int = 1,
+                 tae: typing.Type[ExecuteTARun] = ExecuteTARunOld,
+                 use_epm: bool = False,
+                 mode: str = 'standard',
+                 max_size: int = 0,
+                 early_stopping: bool = False,
+                 marginal_contrib: bool = False,
+                 relaxed: bool = False,
                  **kwargs):
         """
         Constructor
@@ -131,7 +131,10 @@ class Hydra(object):
         self.relaxed = relaxed
         if not self.scenario.ta:
             self._tae = ExecuteASKLRun
-            self.tae = ExecuteASKLRun(ta=[''], run_obj=self.scenario.run_obj)
+            self.tae = ExecuteASKLRun(ta=[''],
+                                      run_obj=scenario.run_obj,
+                                      par_factor=scenario.par_factor,
+                                      cost_for_crash=scenario.cost_for_crash)
             self.scenario.cs = self.tae.surro.get_configuration_space()
         else:
             self._tae = tae
@@ -215,7 +218,7 @@ class Hydra(object):
         self.model = model
         self.runhistory2epm = runhistory2epm
 
-    def _get_validation_set(self, val_set: str, delete: bool=True) -> typing.List[str]:
+    def _get_validation_set(self, val_set: str, delete: bool = True) -> typing.List[str]:
         """
         Create small validation set for hydra to determine incumbent performance
 
@@ -242,7 +245,7 @@ class Hydra(object):
             self.logger.warning('Can not determine validation set size. Using full training-set!')
             return self.scenario.train_insts
         else:
-            size = int(val_set[3:])/100
+            size = int(val_set[3:]) / 100
             if size <= 0 or size >= 1:
                 raise ValueError('X invalid in valX, should be between 0 and 1')
             insts = np.array(self.scenario.train_insts)
@@ -295,7 +298,7 @@ class Hydra(object):
                 contribution_improvement[best_c] += prev_best - best
             else:
                 contribution_improvement[best_c] += self.scenario.cutoff * self.scenario.par_factor - best
-        self.logger.info(';,.,;'*24)
+        self.logger.info(';,.,;' * 24)
         self.logger.info('Contributions: ')
         _sum = np.sum(list(contribution_improvement.values()))
         results = []
@@ -310,12 +313,12 @@ class Hydra(object):
                              weighted_contribution)
             self.logger.info(' ')
             results.append((config, weighted_contribution))
-        self.logger.info(';,.,;'*24)
+        self.logger.info(';,.,;' * 24)
         return results
 
     def get_marginal_contribution(self,
-                                        portfolio: typing.List[Configuration],
-                                        candidates: typing.List[Configuration]):
+                                  portfolio: typing.List[Configuration],
+                                  candidates: typing.List[Configuration]):
         """
         Construct portfolio only from configurations that contribute to the overall improvement
 
@@ -345,7 +348,7 @@ class Hydra(object):
                     best = c_idx
                     bimp = cont
             contribution[candidates[best]] = bimp
-        self.logger.info(';,.,;'*24)
+        self.logger.info(';,.,;' * 24)
         self.logger.info('Contributions: ')
         results = []
         for conf in candidates:
@@ -354,13 +357,13 @@ class Hydra(object):
             results.append((conf, contribution[conf]))
             self.logger.info('%6.3f', contribution[conf])
             self.logger.info(' ')
-        self.logger.info(';,.,;'*24)
+        self.logger.info(';,.,;' * 24)
         return results
 
     def get_contributing_configurations(self,
                                         portfolio: typing.List[Configuration],
                                         candidates: typing.List[Configuration],
-                                        marginal: bool=False):
+                                        marginal: bool = False):
         """
         Construct portfolio only from configurations that contribute to the overall improvement
 
@@ -394,7 +397,7 @@ class Hydra(object):
 
     def predict_missing_data(self, cost_per_inst: typing.Dict[str, float],
                              config: Configuration,
-                             fit: bool=False) -> typing.Dict[str, float]:
+                             fit: bool = False) -> typing.Dict[str, float]:
         """
         For instances that were not validated, predict the missing performance values.
 
@@ -481,7 +484,7 @@ class Hydra(object):
             else:
                 tae = self._tae
             self._last_timed = time.time()
-            self.logger.info("="*120)
+            self.logger.info("=" * 120)
             mode_str = self.mode
             if self.marginal_contrib and self.mode in ['rr', 'contribution']:
                 mode_str += '-marginal_contrib'
@@ -577,7 +580,7 @@ class Hydra(object):
             with open(os.path.join(self.scenario.output_dir, 'portfolio.pkl'), 'wb') as fh:
                 pickle.dump(self.portfolio, fh)
             self.stats['wallclock_time'] = time.time() - self._start
-            self.print_stats(i+1)
+            self.print_stats(i + 1)
 
             self.scenario.output_dir = os.path.join(self.top_dir, "psmac3-output_%s" % (
                 datetime.datetime.fromtimestamp(time.time()).strftime('%Y-%m-%d_%H:%M:%S_%f')))
@@ -588,19 +591,19 @@ class Hydra(object):
             self.portfolio.append(self.dequeued.pop(0))
         with open(os.path.join(self.top_dir, 'portfolio.pkl'), 'wb') as fh:
             pickle.dump(self.portfolio, fh)
-        self.logger.info("~"*120)
+        self.logger.info("~" * 120)
         self.logger.info('Resulting Portfolio:')
         for configuration in self.portfolio:
             self.logger.info(str(configuration))
         self.stats['wallclock_time'] = time.time() - self._start
-        self.print_stats(i+1)
+        self.print_stats(i + 1)
         with open(os.path.join(self.top_dir, 'stats.json'), 'w') as fh:
             json.dump(self.stats, fh, indent=4, sort_keys=True)
         return self.portfolio
 
     def print_stats(self, iteration):
-        self.logger.info("~"*120)
-        self.logger.info("*"*120)
+        self.logger.info("~" * 120)
+        self.logger.info("*" * 120)
         self.logger.info("~Statistics:")
         self.logger.info("*Incumbent changed: %d",
                          sum(list(map(lambda x: x['cumulative']['inc_changed'], self.stats['iteration_psmac_time'])))
@@ -624,12 +627,12 @@ class Hydra(object):
         self.logger.info(
             "~Used wallclock time: %.2f / %.2f sec ", time.time() - self._start, np.float('inf'))
         self.logger.info('*Hydra Iterations: %d / %d', iteration, self.n_iterations)
-        self.logger.info('~SMAC runs: %d', iteration*self.n_optimizers)
+        self.logger.info('~SMAC runs: %d', iteration * self.n_optimizers)
         self.stats['iterations'] = iteration
-        self.stats['#smac'] = iteration*self.n_optimizers
+        self.stats['#smac'] = iteration * self.n_optimizers
         self.stats['#smac_per_iteration'] = self.n_optimizers
-        self.logger.info("*"*120)
-        self.logger.info("~"*120)
+        self.logger.info("*" * 120)
+        self.logger.info("~" * 120)
 
     def _update_portfolio(self, incs: np.ndarray, config_cost_per_inst: typing.Dict) -> typing.Union[np.float, float]:
         """
