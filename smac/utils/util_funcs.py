@@ -8,48 +8,74 @@ from ConfigSpace.hyperparameters import CategoricalHyperparameter, \
 from smac.utils.constants import MAXINT
 
 
-def get_types(config_space, instance_features=None):
-    """TODO"""
-    # Extract types vector for rf from config space and the bounds
-    types = np.zeros(len(config_space.get_hyperparameters()),
-                     dtype=np.uint)
-    bounds = [(np.nan, np.nan)]*types.shape[0]
+def get_types(config_space, instance_features=None, kde: bool=False):
+    """
+    Get types of the data to setup RF/KDE model
 
-    for i, param in enumerate(config_space.get_hyperparameters()):
-        if isinstance(param, (CategoricalHyperparameter)):
-            n_cats = len(param.choices)
-            types[i] = n_cats
-            bounds[i] = (int(n_cats), np.nan)
+    config_space: ConfigSpace object
+    instance_features: dict (str -> float)
+    """
+    if not kde:
+        # Extract types vector for rf from config space and the bounds
+        types = np.zeros(len(config_space.get_hyperparameters()),
+                         dtype=np.uint)
+        bounds = [(np.nan, np.nan)]*types.shape[0]
 
-        elif isinstance(param, (OrdinalHyperparameter)):
-            n_cats = len(param.sequence)
-            types[i] = 0
-            bounds[i] = (0, int(n_cats) - 1)
+        for i, param in enumerate(config_space.get_hyperparameters()):
+            if isinstance(param, (CategoricalHyperparameter)):
+                n_cats = len(param.choices)
+                types[i] = n_cats
+                bounds[i] = (int(n_cats), np.nan)
 
-        elif isinstance(param, Constant):
-            # for constants we simply set types to 0
-            # which makes it a numerical parameter
-            types[i] = 0
-            bounds[i] = (0, np.nan)
-            # and we leave the bounds to be 0 for now
-        elif isinstance(param, UniformFloatHyperparameter):         # Are sampled on the unit hypercube thus the bounds
-            # bounds[i] = (float(param.lower), float(param.upper))  # are always 0.0, 1.0
-            bounds[i] = (0.0, 1.0)
-        elif isinstance(param, UniformIntegerHyperparameter):
-            # bounds[i] = (int(param.lower), int(param.upper))
-            bounds[i] = (0.0, 1.0)
-        elif not isinstance(param, (UniformFloatHyperparameter,
-                                    UniformIntegerHyperparameter,
-                                    OrdinalHyperparameter)):
-            raise TypeError("Unknown hyperparameter type %s" % type(param))
+            elif isinstance(param, (OrdinalHyperparameter)):
+                n_cats = len(param.sequence)
+                types[i] = 0
+                bounds[i] = (0, int(n_cats) - 1)
 
-    if instance_features is not None:
-        types = np.hstack(
-            (types, np.zeros((instance_features.shape[1]))))
+            elif isinstance(param, Constant):
+                # for constants we simply set types to 0
+                # which makes it a numerical parameter
+                types[i] = 0
+                bounds[i] = (0, np.nan)
+                # and we leave the bounds to be 0 for now
+            elif isinstance(param, UniformFloatHyperparameter):         # Are sampled on the unit hypercube thus the bounds
+                # bounds[i] = (float(param.lower), float(param.upper))  # are always 0.0, 1.0
+                bounds[i] = (0.0, 1.0)
+            elif isinstance(param, UniformIntegerHyperparameter):
+                # bounds[i] = (int(param.lower), int(param.upper))
+                bounds[i] = (0.0, 1.0)
+            elif not isinstance(param, (UniformFloatHyperparameter,
+                                        UniformIntegerHyperparameter,
+                                        OrdinalHyperparameter)):
+                raise TypeError("Unknown hyperparameter type %s" % type(param))
 
-    types = np.array(types, dtype=np.uint)
-    bounds = np.array(bounds, dtype=object)
-    return types, bounds
+        if instance_features is not None:
+            types = np.hstack(
+                (types, np.zeros((instance_features.shape[1]))))
+
+        types = np.array(types, dtype=np.uint)
+        bounds = np.array(bounds, dtype=object)
+        return types, bounds
+    else:
+        types = []
+        num_values = []
+        for hp in config_space.get_hyperparameters():
+            # print(hp)
+            if isinstance(hp, CategoricalHyperparameter):
+                types.append('U')
+                num_values.append(len(hp.choices))
+            elif isinstance(hp, UniformIntegerHyperparameter):
+                types.append('I')
+                num_values.append((hp.upper - hp.lower + 1))
+            elif isinstance(hp, UniformFloatHyperparameter):
+                types.append('C')
+                num_values.append(np.inf)
+            elif isinstance(hp, OrdinalHyperparameter):
+                types.append('O')
+                num_values.append(len(hp.sequence))
+            else:
+                raise ValueError('Unsupported Parametertype %s' % type(hp))
+        return types, num_values
 
 
 def get_rng(
