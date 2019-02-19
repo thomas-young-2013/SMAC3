@@ -23,6 +23,7 @@ class TaeHydra(unittest.TestCase):
         base_dir = os.path.split(__file__)[0]
         base_dir = os.path.join(base_dir, '..', '..')
         self.oracle = defaultdict(float)
+        self.oracle[1] = 1
         os.chdir(base_dir)
 
     def tearDown(self):

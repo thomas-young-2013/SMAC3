@@ -124,7 +124,8 @@ class TestDeterministicSMAC(unittest.TestCase):
                 initial_configurations=None, restore_incumbent=None, run_id=2,
                 incs_per_round=1, n_iterations=3,
                 n_optimizers=1, random_configuration_chooser=mock.ANY,
-                runhistory=None, stats=None, scenario=mock.ANY, rng=mock.ANY, val_set='train'
+                runhistory=None, stats=None, scenario=mock.ANY, rng=mock.ANY, val_set='train',
+                use_epm=False, relaxed=False, mode='standard', max_size=0, marginal_contrib=False
             )
 
         testargs[-1] = 'PSMAC'
@@ -134,5 +135,5 @@ class TestDeterministicSMAC(unittest.TestCase):
             cli.main_cli(testargs[1:])
             MSMAC.assert_called_once_with(
                 run_id=2, scenario=mock.ANY, rng=mock.ANY,
-                n_incs=1, n_optimizers=1, shared_model=False, validate=False
+                n_incs=1, n_optimizers=1, shared_model=False, validate=False, use_epm=False
             )
