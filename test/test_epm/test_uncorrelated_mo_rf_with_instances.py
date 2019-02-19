@@ -19,14 +19,15 @@ class TestUncorrelatedMultiObjectiveWrapper(unittest.TestCase):
         X = rs.rand(20, 10)
         Y = rs.rand(10, 2)
         model = UncorrelatedMultiObjectiveRandomForestWithInstances(
-            ['cost', 'ln(runtime)'],
+            target_names=['cost', 'ln(runtime)'],
             types=np.zeros((10, ), dtype=np.uint),
-            bounds=np.array([
+            bounds=[
                 (0, np.nan), (0, np.nan), (0, np.nan), (0, np.nan), (0, np.nan),
                 (0, np.nan), (0, np.nan), (0, np.nan), (0, np.nan), (0, np.nan)
-            ], dtype=object),
+            ],
+            seed=1,
             rf_kwargs={'seed': 1},
-            pca_components=5
+            pca_components=5,
         )
         self.assertEqual(model.estimators[0].seed, 1)
         self.assertEqual(model.estimators[1].seed, 1)
@@ -36,6 +37,7 @@ class TestUncorrelatedMultiObjectiveWrapper(unittest.TestCase):
         self.assertEqual(m.shape, (10, 2))
         self.assertEqual(v.shape, (10, 2))
 
+    # We need to track how often the base model was called!
     @mock.patch.object(RandomForestWithInstances, 'predict')
     def test_predict_mocked(self, rf_mock):
         class SideEffect(object):
@@ -56,10 +58,12 @@ class TestUncorrelatedMultiObjectiveWrapper(unittest.TestCase):
         model = UncorrelatedMultiObjectiveRandomForestWithInstances(
             ['cost', 'ln(runtime)', 'foo'],
             types=np.zeros((10,), dtype=np.uint),
-            bounds=np.array([
+            bounds=[
                 (0, np.nan), (0, np.nan), (0, np.nan), (0, np.nan), (0, np.nan),
                 (0, np.nan), (0, np.nan), (0, np.nan), (0, np.nan), (0, np.nan)
-            ], dtype=object),
+            ],
+            seed=1,
+            rf_kwargs={'seed': 1},
         )
 
         model.train(X[:10], Y[:10])

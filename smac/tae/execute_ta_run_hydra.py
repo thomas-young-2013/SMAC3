@@ -1,9 +1,9 @@
 import typing
+from importlib.util import find_spec
 
 from smac.tae.execute_ta_run_old import ExecuteTARunOld
 from smac.tae.execute_ta_run_aclib import ExecuteTARunAClib
 from smac.tae.execute_ta_run_aclib import ExecuteTARun
-from smac.tae.execute_askl_surrogate_run import ExecuteASKLRun
 from smac.tae.execute_func import ExecuteTAFuncDict
 from smac.tae.execute_func import ExecuteTAFuncArray
 from smac.tae.execute_ta_run_old import StatusType
@@ -41,14 +41,18 @@ class ExecuteTARunHydra(ExecuteTARun):
         self.port = portfolio
         self.logger.info('cost_oracle: %s', str(self.cost_oracle is not None))
         self.logger.info('portfolio: %s', str(self.port is not None))
+        self.askl_bench = find_spec('automl_benchmkars')
         if self.cost_oracle:
             self.logger.info('HYDRA: using standard TAE')
         elif self.port:
             self.logger.info('HYDRA: using relaxed TAE')
         else:
             raise Exception('No information about Portfolio provided!')
-        if tae is ExecuteASKLRun:
-            self.runner = ExecuteASKLRun(**kwargs)
+
+        if find_spec('automl_benchmkars'):
+            from smac.tae.execute_askl_surrogate_run import ExecuteASKLRun
+            if tae is ExecuteASKLRun:
+                self.runner = ExecuteASKLRun(**kwargs)
         elif tae is ExecuteTARunAClib:
             self.runner = ExecuteTARunAClib(**kwargs)
         elif tae is ExecuteTARunOld:

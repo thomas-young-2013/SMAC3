@@ -27,7 +27,7 @@ class AbstractAcquisitionFunction(object, metaclass=abc.ABCMeta):
     def __str__(self):
         return type(self).__name__ + " (" + self.long_name + ")"
 
-    def __init__(self, model: AbstractEPM, **kwargs):
+    def __init__(self, model: AbstractEPM):
         """Constructor
 
         Parameters
@@ -63,7 +63,7 @@ class AbstractAcquisitionFunction(object, metaclass=abc.ABCMeta):
         ----------
         configurations : list
             The configurations where the acquisition function
-            should be evaluated. 
+            should be evaluated.
 
         Returns
         -------
@@ -106,14 +106,13 @@ class EI(AbstractAcquisitionFunction):
     r"""Computes for a given x the expected improvement as
     acquisition value.
 
-    :math:`EI(X) := \mathbb{E}\left[ \max\{0, f(\mathbf{X^+}) - f_{t+1}(\mathbf{X}) - \xi\right] \} ]`,
+    :math:`EI(X) := \mathbb{E}\left[ \max\{0, f(\mathbf{X^+}) - f_{t+1}(\mathbf{X}) - \xi \} \right]`,
     with :math:`f(X^+)` as the incumbent.
     """
 
     def __init__(self,
                  model: AbstractEPM,
-                 par: float=0.0,
-                 **kwargs):
+                 par: float=0.0):
         """Constructor
 
         Parameters
@@ -184,11 +183,10 @@ class EI(AbstractAcquisitionFunction):
 class EIPS(EI):
     def __init__(self,
                  model: AbstractEPM,
-                 par: float=0.0,
-                 **kwargs):
+                 par: float=0.0):
         r"""Computes for a given x the expected improvement as
         acquisition value.
-        :math:`EI(X) := \frac{\mathbb{E}\left[ \max\{0, f(\mathbf{X^+}) - f_{t+1}(\mathbf{X}) - \xi\right] \} ]} {np.log10(r(x))}`,
+        :math:`EI(X) := \frac{\mathbb{E}\left[ \max\{0, f(\mathbf{X^+}) - f_{t+1}(\mathbf{X}) - \xi\right] \} ]} {np.log(r(x))}`,
         with :math:`f(X^+)` as the incumbent and :math:`r(x)` as runtime.
 
         Parameters
@@ -270,8 +268,7 @@ class LogEI(AbstractAcquisitionFunction):
 
     def __init__(self,
                  model: AbstractEPM,
-                 par: float=0.0,
-                 **kwargs):
+                 par: float=0.0):
         r"""Computes for a given x the logarithm expected improvement as
         acquisition value.
 
@@ -316,9 +313,10 @@ class LogEI(AbstractAcquisitionFunction):
         std = np.sqrt(var_)
 
         def calculate_log_ei():
+            # we expect that f_min is in log-space
             f_min = self.eta - self.par
-            v = (np.log(f_min) - m) / std
-            return (f_min * norm.cdf(v)) - \
+            v = (f_min - m) / std
+            return (np.exp(f_min) * norm.cdf(v)) - \
                 (np.exp(0.5 * var_ + m) * norm.cdf(v - std))
 
         if np.any(std == 0.0):
@@ -339,3 +337,106 @@ class LogEI(AbstractAcquisitionFunction):
                 "Expected Improvement is smaller than 0 for at least one sample.")
 
         return log_ei.reshape((-1, 1))
+
+
+class PI(AbstractAcquisitionFunction):
+    def __init__(self,
+                 model: AbstractEPM,
+                 par: float=0.0):
+
+        """Computes the probability of improvement for a given x over the best so far value as
+        acquisition value.
+
+        :math:`P(f_{t+1}(\mathbf{X})\geq f(\mathbf{X^+})) :=
+        \Phi(\frac{\mu(\mathbf{X}) - f(\mathbf{X^+})}{\sigma(\mathbf{X})})`,
+        with :math:`f(X^+)` as the incumbent and :math:`\Phi` the cdf of the standard normal
+
+        Parameters
+        ----------
+        model : AbstractEPM
+            A model that implements at least
+                 - predict_marginalized_over_instances(X)
+        par : float, default=0.0
+            Controls the balance between exploration and exploitation of the
+            acquisition function.
+        """
+        super(PI, self).__init__(model)
+        self.long_name = 'Probability of Improvement'
+        self.par = par
+        self.eta = None
+
+    def _compute(self, X: np.ndarray):
+        """Computes the PI value.
+
+        Parameters
+        ----------
+        X: np.ndarray(N, D)
+           Points to evaluate PI. N is the number of points and D the dimension for the points
+
+        Returns
+        -------
+        np.ndarray(N,1)
+            Expected Improvement of X
+        """
+        if self.eta is None:
+            raise ValueError('No current best specified. Call update('
+                             'eta=<float>) to inform the acquisition function '
+                             'about the current best value.')
+
+        if len(X.shape) == 1:
+            X = X[:, np.newaxis]
+        m, var_ = self.model.predict_marginalized_over_instances(X)
+        std = np.sqrt(var_)
+        return norm.cdf((self.eta - m - self.par) / std)
+
+
+class LCB(AbstractAcquisitionFunction):
+    def __init__(self,
+                 model: AbstractEPM,
+                 par: float=1.0):
+
+        """Computes the lower confidence bound for a given x over the best so far value as
+        acquisition value.
+
+        :math:`LCB(X) = \mu(\mathbf{X}) - \sqrt(\beta_t)\sigma(\mathbf{X})`
+
+        Returns -LCB(X) as the acquisition_function optimizer maximizes the acquisition value.
+
+        Parameters
+        ----------
+        model : AbstractEPM
+            A model that implements at least
+                 - predict_marginalized_over_instances(X)
+        par : float, default=0.0
+            Controls the balance between exploration and exploitation of the
+            acquisition function.
+        """
+        super(LCB, self).__init__(model)
+        self.long_name = 'Lower Confidence Bound'
+        self.par = par
+        self.eta = None  # to be compatible with the existing update calls in SMBO
+        self.num_data = None
+
+    def _compute(self, X: np.ndarray):
+        """Computes the LCB value.
+
+        Parameters
+        ----------
+        X: np.ndarray(N, D)
+           Points to evaluate LCB. N is the number of points and D the dimension for the points
+
+        Returns
+        -------
+        np.ndarray(N,1)
+            Expected Improvement of X
+        """
+        if self.num_data is None:
+            raise ValueError('No current number of Datapoints specified. Call update('
+                             'num_data=<int>) to inform the acquisition function '
+                             'about the number of datapoints.')
+        if len(X.shape) == 1:
+            X = X[:, np.newaxis]
+        m, var_ = self.model.predict_marginalized_over_instances(X)
+        std = np.sqrt(var_)
+        beta = 2*np.log((X.shape[1] * self.num_data**2) / self.par)
+        return -(m - np.sqrt(beta)*std)

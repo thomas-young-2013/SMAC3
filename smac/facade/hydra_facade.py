@@ -6,6 +6,7 @@ import typing
 import copy
 import json
 from collections import defaultdict
+from importlib.util import find_spec
 
 import pickle
 from functools import partial
@@ -17,7 +18,6 @@ from ConfigSpace.configuration_space import Configuration
 from smac.tae.execute_ta_run_hydra import ExecuteTARunHydra
 from smac.tae.execute_ta_run_hydra import ExecuteTARunOld
 from smac.tae.execute_ta_run_hydra import ExecuteTARun
-from smac.tae.execute_askl_surrogate_run import ExecuteASKLRun
 from smac.scenario.scenario import Scenario
 from smac.facade.smac_facade import SMAC
 from smac.facade.psmac_facade import PSMAC
@@ -66,6 +66,7 @@ class Hydra(object):
                  rng: typing.Optional[typing.Union[np.random.RandomState, int]] = None,
                  run_id: int = 1,
                  tae: typing.Type[ExecuteTARun] = ExecuteTARunOld,
+                 tae_kwargs: typing.Union[dict, None] = None,
                  use_epm: bool = False,
                  mode: str = 'standard',
                  max_size: int = 0,
@@ -96,6 +97,8 @@ class Hydra(object):
             run_id for this hydra run
         tae: ExecuteTARun
             Target Algorithm Runner (supports old and aclib format as well as AbstractTAFunc)
+        tae_kwargs: Optional[dict]
+            arguments passed to constructor of '~tae'
         use_epm: bool
             Flag to determine if the validation uses real runs or EPM predictions
         mode: str
@@ -129,16 +132,18 @@ class Hydra(object):
         self.runhistory2epm = None
         self.rh = RunHistory(average_cost)
         self.relaxed = relaxed
-        if not self.scenario.ta:
-            self._tae = ExecuteASKLRun
-            self.tae = ExecuteASKLRun(ta=[''],
-                                      run_obj=scenario.run_obj,
-                                      par_factor=scenario.par_factor,
-                                      cost_for_crash=scenario.cost_for_crash)
-            self.scenario.cs = self.tae.surro.get_configuration_space()
-        else:
-            self._tae = tae
-            self.tae = tae(ta=self.scenario.ta, run_obj=self.scenario.run_obj)
+
+        if find_spec('automl_benchmkars'):
+            from smac.tae.execute_askl_surrogate_run import ExecuteASKLRun
+            if not self.scenario.ta:
+                self._tae = ExecuteASKLRun
+                tmp = ExecuteASKLRun(ta=[''],
+                                     run_obj=scenario.run_obj,
+                                     par_factor=scenario.par_factor,
+                                     cost_for_crash=scenario.cost_for_crash)
+                self.scenario.cs = tmp.surro.get_configuration_space()
+        self._tae = tae
+        self._tae_kwargs = tae_kwargs
         if incs_per_round <= 0:
             self.logger.warning('Invalid value in %s: %d. Setting to 1', 'incs_per_round', incs_per_round)
         self.incs_per_round = max(incs_per_round, 1)
@@ -473,7 +478,7 @@ class Hydra(object):
         scen.output_dir_for_this_run = None
         scen.output_dir = None
         # parent process SMAC only used for validation purposes
-        self.solver = SMAC(scenario=scen, tae_runner=self.tae, rng=self.rng, run_id=self.run_id, **self.kwargs)
+        self.solver = SMAC(scenario=scen, tae_runner=self._tae, rng=self.rng, run_id=self.run_id, **self.kwargs)
         for i in range(self.n_iterations):
             if i > 0:
                 self.stats['iteration_wall_time'].append(time.time() - self._last_timed)
@@ -490,11 +495,22 @@ class Hydra(object):
                 mode_str += '-marginal_contrib'
             self.logger.info("Hydra (%s) Iteration: %d", mode_str, (i + 1))
 
+            if i == 0:
+                tae = self._tae
+                tae_kwargs = self._tae_kwargs
+            else:
+                tae = ExecuteTARunHydra
+                if self._tae_kwargs:
+                    tae_kwargs = self._tae_kwargs
+                else:
+                    tae_kwargs = {}
+                tae_kwargs['cost_oracle'] = self.cost_per_inst
             self.optimizer = PSMAC(
                 scenario=self.scenario,
                 run_id=self.run_id,
                 rng=self.rng,
                 tae=tae,
+                tae_kwargs=tae_kwargs,
                 shared_model=False,
                 validate=True if self.val_set else False,
                 n_optimizers=self.n_optimizers,

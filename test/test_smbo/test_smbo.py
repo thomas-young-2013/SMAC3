@@ -1,7 +1,5 @@
-from contextlib import suppress
 import unittest
 from unittest import mock
-import os
 import shutil
 from nose.plugins.attrib import attr
 
@@ -9,21 +7,19 @@ import numpy as np
 from ConfigSpace import Configuration
 
 from smac.epm.rf_with_instances import RandomForestWithInstances
-from smac.epm.uncorrelated_mo_rf_with_instances import \
-    UncorrelatedMultiObjectiveRandomForestWithInstances
+from smac.epm.gaussian_process_mcmc import GaussianProcessMCMC
 from smac.facade.smac_facade import SMAC
-from smac.initial_design.single_config_initial_design import SingleConfigInitialDesign
-from smac.optimizer.acquisition import EI, EIPS, LogEI
+from smac.initial_design.initial_design import InitialDesign
+from smac.optimizer.acquisition import EI, LogEI
 from smac.optimizer.objective import average_cost
 from smac.runhistory.runhistory import RunHistory
-from smac.runhistory.runhistory2epm import RunHistory2EPM4Cost, \
-    RunHistory2EPM4LogCost, RunHistory2EPM4EIPS
+from smac.runhistory.runhistory2epm import RunHistory2EPM4Cost, RunHistory2EPM4LogCost
 from smac.scenario.scenario import Scenario
 from smac.tae.execute_ta_run import FirstRunCrashedException
 from smac.utils import test_helpers
-from smac.utils.util_funcs import get_types
 from smac.utils.io.traj_logging import TrajLogger
 from smac.utils.validate import Validator
+
 
 
 class ConfigurationMock(object):
@@ -60,27 +56,13 @@ class TestSMBO(unittest.TestCase):
         smbo = SMAC(self.scenario).solver
         self.assertIsInstance(smbo.model, RandomForestWithInstances)
         self.assertIsInstance(smbo.rh2EPM, RunHistory2EPM4LogCost)
-        self.assertIsInstance(smbo.acquisition_func, EI)
+        self.assertIsInstance(smbo.acquisition_func, LogEI)
 
     def test_init_only_scenario_quality(self):
         smbo = SMAC(self.scenario).solver
         self.assertIsInstance(smbo.model, RandomForestWithInstances)
         self.assertIsInstance(smbo.rh2EPM, RunHistory2EPM4Cost)
         self.assertIsInstance(smbo.acquisition_func, EI)
-
-    def test_init_EIPS_as_arguments(self):
-        for objective in ['runtime', 'quality']:
-            self.scenario.run_obj = objective
-            types, bounds = get_types(self.scenario.cs, None)
-            umrfwi = UncorrelatedMultiObjectiveRandomForestWithInstances(
-                ['cost', 'runtime'], types, bounds)
-            eips = EIPS(umrfwi)
-            rh2EPM = RunHistory2EPM4EIPS(self.scenario, 2)
-            smbo = SMAC(self.scenario, model=umrfwi, acquisition_function=eips,
-                        runhistory2epm=rh2EPM).solver
-            self.assertIs(umrfwi, smbo.model)
-            self.assertIs(eips, smbo.acquisition_func)
-            self.assertIs(rh2EPM, smbo.rh2EPM)
 
     def test_rng(self):
         smbo = SMAC(self.scenario, rng=None).solver
@@ -163,14 +145,20 @@ class TestSMBO(unittest.TestCase):
         self.assertIsInstance(x[0], Configuration)
 
     def test_choose_next_2(self):
+        # Test with a single configuration in the runhistory!
         def side_effect(X):
             return np.mean(X, axis=1).reshape((-1, 1))
+
+        def side_effect_predict(X):
+            m, v = np.ones((X.shape[0], 1)), None
+            return m, v
 
         smbo = SMAC(self.scenario, rng=1).solver
         smbo.incumbent = self.scenario.cs.sample_configuration()
         smbo.runhistory = RunHistory(aggregate_func=average_cost)
         smbo.runhistory.add(smbo.incumbent, 10, 10, 1)
         smbo.model = mock.Mock(spec=RandomForestWithInstances)
+        smbo.model.predict_marginalized_over_instances.side_effect = side_effect_predict
         smbo.acquisition_func._compute = mock.Mock(spec=RandomForestWithInstances)
         smbo.acquisition_func._compute.side_effect = side_effect
 
@@ -178,31 +166,41 @@ class TestSMBO(unittest.TestCase):
         Y = smbo.rng.rand(10, 1)
 
         challengers = smbo.choose_next(X, Y)
-        x = [c for c in challengers]
+        # Convert challenger list (a generator) to a real list
+        challengers = [c for c in challengers]
 
         self.assertEqual(smbo.model.train.call_count, 1)
 
-        self.assertEqual(len(x), 9999)
+        # For each configuration it is randomly sampled whether to take it from the list of challengers or to sample it
+        # completely at random. Therefore, it is not guaranteed to obtain twice the number of configurations selected
+        # by EI.
+        self.assertEqual(len(challengers), 9929)
+        num_random_search_sorted = 0
         num_random_search = 0
         num_local_search = 0
-        for i in range(0, 2002, 2):
-            # print(x[i].origin)
-            self.assertIsInstance(x[i], Configuration)
-            if 'Random Search (sorted)' in x[i].origin:
+        for c in challengers:
+            self.assertIsInstance(c, Configuration)
+            if 'Random Search (sorted)' == c.origin:
+                num_random_search_sorted += 1
+            elif 'Random Search' == c.origin:
                 num_random_search += 1
-            elif 'Local Search' in x[i].origin:
+            elif 'Local Search' == c.origin:
                 num_local_search += 1
-        # number of local search configs has to be least 10
-        # since x can have duplicates
-        # which can be associated with the local search
-        self.assertGreaterEqual(num_local_search, 1)
-        for i in range(1, 2002, 2):
-            self.assertIsInstance(x[i], Configuration)
-            self.assertEqual(x[i].origin, 'Random Search')
+            else:
+                raise ValueError(c.origin)
+
+        self.assertEqual(num_local_search, 1)
+        self.assertEqual(num_random_search_sorted, 4999)
+        self.assertEqual(num_random_search, 4929)
 
     def test_choose_next_3(self):
+        # Test with ten configurations in the runhistory
         def side_effect(X):
             return np.mean(X, axis=1).reshape((-1, 1))
+
+        def side_effect_predict(X):
+            m, v = np.ones((X.shape[0], 1)), None
+            return m, v
 
         smbo = SMAC(self.scenario, rng=1).solver
         smbo.incumbent = self.scenario.cs.sample_configuration()
@@ -211,6 +209,7 @@ class TestSMBO(unittest.TestCase):
         for i in range(0, len(previous_configs)):
             smbo.runhistory.add(previous_configs[i], i, 10, 1)
         smbo.model = mock.Mock(spec=RandomForestWithInstances)
+        smbo.model.predict_marginalized_over_instances.side_effect = side_effect_predict
         smbo.acquisition_func._compute = mock.Mock(spec=RandomForestWithInstances)
         smbo.acquisition_func._compute.side_effect = side_effect
 
@@ -218,28 +217,34 @@ class TestSMBO(unittest.TestCase):
         Y = smbo.rng.rand(10, 1)
 
         challengers = smbo.choose_next(X, Y)
-        x = [c for c in challengers]
+        # Convert challenger list (a generator) to a real list
+        challengers = [c for c in challengers]
 
         self.assertEqual(smbo.model.train.call_count, 1)
-        self.assertEqual(len(x), 9999)
+
+        # For each configuration it is randomly sampled whether to take it from the list of challengers or to sample it
+        # completely at random. Therefore, it is not guaranteed to obtain twice the number of configurations selected
+        # by EI.
+        self.assertEqual(len(challengers), 9929)
+        num_random_search_sorted = 0
         num_random_search = 0
         num_local_search = 0
-        for i in range(0, 9999, 2):
-            # print(x[i].origin)
-            self.assertIsInstance(x[i], Configuration)
-            if 'Random Search (sorted)' in x[i].origin:
+        for c in challengers:
+            self.assertIsInstance(c, Configuration)
+            if 'Random Search (sorted)' == c.origin:
+                num_random_search_sorted += 1
+            elif 'Random Search' == c.origin:
                 num_random_search += 1
-            elif 'Local Search' in x[i].origin:
+            elif 'Local Search' == c.origin:
                 num_local_search += 1
-        # number of local search configs has to be least 10
-        # since x can have duplicates
-        # which can be associated with the local search
-        self.assertGreaterEqual(num_local_search, 10)
-        for i in range(1, 2020, 2):
-            self.assertIsInstance(x[i], Configuration)
-            self.assertEqual(x[i].origin, 'Random Search')
+            else:
+                raise ValueError(c.origin)
 
-    @mock.patch.object(SingleConfigInitialDesign, 'run')
+        self.assertEqual(num_local_search, 10)
+        self.assertEqual(num_random_search_sorted, 4990)
+        self.assertEqual(num_random_search, 4929)
+
+    @mock.patch.object(InitialDesign, 'run')
     def test_abort_on_initial_design(self, patch):
         def target(x):
             return 5
@@ -303,10 +308,37 @@ class TestSMBO(unittest.TestCase):
         smac = SMAC(self.scenario)
         self.output_dirs.append(smac.output_dir)
         smbo = smac.solver
-        with mock.patch.object(SingleConfigInitialDesign, "run", return_value=None) as initial_mock:
+        with mock.patch.object(InitialDesign, "run", return_value=None) as initial_mock:
             smbo.start()
             self.assertEqual(smbo.incumbent, smbo.scenario.cs.get_default_configuration())
 
+    def test_comp_builder(self):
+        seed = 42
+        smbo = SMAC(self.scenario, rng=seed).solver
+        conf = {"model":"RF", "acq_func":"EI"}
+        acqf, model = smbo._component_builder(conf)
+
+        self.assertTrue(isinstance(acqf, EI))
+        self.assertTrue(isinstance(model, RandomForestWithInstances))
+
+        conf = {"model":"GP", "acq_func":"EI"}
+        acqf, model = smbo._component_builder(conf)
+
+        self.assertTrue(isinstance(acqf, EI))
+        self.assertTrue(isinstance(model, GaussianProcessMCMC))
+
+    def test_smbo_cs(self):
+        seed = 42
+        smbo = SMAC(self.scenario, rng=seed).solver
+        cs = smbo._get_acm_cs()
+
+    def test_cs_comp_builder(self):
+        seed = 42
+        smbo = SMAC(self.scenario, rng=seed).solver
+        cs = smbo._get_acm_cs()
+        conf = cs.sample_configuration()
+
+        acqf, model = smbo._component_builder(conf)
 
 if __name__ == "__main__":
     unittest.main()
