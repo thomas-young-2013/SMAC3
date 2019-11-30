@@ -497,3 +497,30 @@ class SMAC(object):
             vector of bools indicating whether the y-value is censored
         """
         return self.solver.rh2EPM.get_X_y(self.runhistory)
+
+    def get_incumbent_value(self):
+        """new added!"""
+        return self.solver._get_incumbent_value()
+
+    def iterate(self, save=False):
+        """
+        Iterate the HPO main loop: new added.
+
+        :return: the best found configuration now.
+        """
+        incumbent = self.solver.iterate()
+        if save:
+            self.solver.stats.save()
+            self.solver.stats.print_stats()
+            self.logger.info("Iteration %d, the incumbent: %s" % (self.solver.iter_id, self.solver.incumbent))
+            if self.solver.incumbent and self.solver.incumbent in self.solver.runhistory.get_all_configs():
+                self.logger.info("Estimated cost of incumbent: %f",
+                                 self.solver.runhistory.get_cost(self.solver.incumbent))
+            self.runhistory = self.solver.runhistory
+            self.trajectory = self.solver.intensifier.traj_logger.trajectory
+
+            if self.output_dir is not None:
+                self.solver.runhistory.save_json(
+                    fn=os.path.join(self.output_dir, "runhistory.json")
+                )
+        return incumbent

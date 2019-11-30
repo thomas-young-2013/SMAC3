@@ -127,6 +127,63 @@ class SMBO(object):
             acquisition_func, self.config_space, rng
         )
 
+        # Added in 0.8.1.
+        self.iter_id = 0
+
+    def iterate(self):
+        """Run an iteration of the Bayesian optimization loop, added in 0.8.1.
+
+        Returns
+        ----------
+        incumbent: np.array(1, H)
+            The best found configuration in the first n iterations.
+        """
+        if self.iter_id == 0:
+            self.start()
+
+        # Main BO iteration.
+        if self.scenario.shared_model:
+            pSMAC.read(run_history=self.runhistory,
+                       output_dirs=self.scenario.input_psmac_dirs,
+                       configuration_space=self.config_space,
+                       logger=self.logger)
+
+        start_time = time.time()
+        X, Y = self.rh2EPM.transform(self.runhistory)
+
+        self.logger.debug("Search for next configuration")
+        # get all found configurations sorted according to acq
+        challengers = self.choose_next(X, Y)
+
+        time_spent = time.time() - start_time
+        time_left = self._get_timebound_for_intensification(time_spent)
+
+        self.logger.debug("Intensify")
+
+        self.incumbent, inc_perf = self.intensifier.intensify(
+            challengers=challengers,
+            incumbent=self.incumbent,
+            run_history=self.runhistory,
+            aggregate_func=self.aggregate_func,
+            time_bound=max(self.intensifier._min_time, time_left))
+
+        if self.scenario.shared_model:
+            pSMAC.write(run_history=self.runhistory,
+                        output_directory=self.scenario.output_dir_for_this_run)
+
+        logging.debug("Remaining budget: %f (wallclock), %f (ta costs), %f (target runs)" % (
+            self.stats.get_remaing_time_budget(),
+            self.stats.get_remaining_ta_budget(),
+            self.stats.get_remaining_ta_runs()))
+
+        if self.stats.is_budget_exhausted():
+            raise AssertionError('Budget exhausted!')
+
+        self.stats.print_stats(debug_out=True)
+
+        self.iter_id += 1
+        return self.incumbent
+
     def start(self):
         """Starts the Bayesian Optimization loop.
         Detects whether we the optimization is restored from previous state.
@@ -153,6 +210,9 @@ class SMBO(object):
                              "incumbent %s", self.incumbent)
             self.logger.info("State restored with following budget:")
             self.stats.print_stats()
+
+        self.iter_id += 1
+        return self.incumbent
 
     def run(self):
         """Runs the Bayesian optimization loop
